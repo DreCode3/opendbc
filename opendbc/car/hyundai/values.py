@@ -34,6 +34,11 @@ class CarControllerParams:
       self.STEER_DELTA_UP = 2
       self.STEER_DELTA_DOWN = 3
 
+    # Dampen steering slew on 2024 G70 to reduce center-hunting oscillation.
+    elif CP.carFingerprint == CAR.GENESIS_G70_2024:
+      self.STEER_DELTA_UP = 2
+      self.STEER_DELTA_DOWN = 5
+
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
     elif CP.carFingerprint in (CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA, CAR.HYUNDAI_ELANTRA_GT_I30, CAR.HYUNDAI_IONIQ,
