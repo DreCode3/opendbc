@@ -36,6 +36,7 @@ class CarControllerParams:
 
     # Dampen steering slew on 2024 G70 to reduce center-hunting oscillation.
     elif CP.carFingerprint == CAR.GENESIS_G70_2024:
+      self.STEER_MAX = 384
       self.STEER_DELTA_UP = 2
       self.STEER_DELTA_DOWN = 5
 
