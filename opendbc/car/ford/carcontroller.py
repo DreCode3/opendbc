@@ -1,11 +1,16 @@
 import math
 import numpy as np
+from collections import deque
+from cereal import messaging
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs
 from opendbc.car.lateral import ISO_LATERAL_ACCEL, apply_std_steer_angle_limits
 from opendbc.car.ford import fordcan
 from opendbc.car.ford.values import CarControllerParams, FordFlags, CAR
 from opendbc.car.interfaces import CarControllerBase, V_CRUISE_MAX
+from selfdrive.modeld.constants import ModelConstants
+from common.pid import PIDController
+from openpilot.common.params import Params
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -64,6 +69,8 @@ class CarController(CarControllerBase):
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.CAN = fordcan.CanBus(CP)
 
+    self.params = Params()
+
     self.apply_curvature_last = 0
     self.anti_overshoot_curvature_last = 0
     self.accel = 0.0
@@ -75,8 +82,42 @@ class CarController(CarControllerBase):
     self.lead_distance_bars_last = None
     self.distance_bar_frame = 0
 
+    # BluePilot: SubMaster for model data
+    self.sm = messaging.SubMaster(['modelV2'])
+    self.model = None
+
+    # BluePilot: Predicted curvature blending
+    self.curvature_lookup_time = 0.2  # seconds
+    self.pc_blend_ratio = 0.40  # 40% predicted, 60% desired
+
+    # BluePilot: Curvature rate computation
+    self.curvature_rate_delta_t = 0.3  # seconds
+    self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
+    self.curvature_rate_last = 0.0
+
+    # BluePilot: PID lane centering (Phase 2, default OFF)
+    self.enable_lane_positioning = False
+    self.LC_PID_controller = PIDController(k_p=0.25, k_i=0.05, rate=20)
+    self.LC_PID_GAIN = 5.0
+    self.path_angle_last = 0.0
+    self.LC_path_angle_reset_counter = 0
+
+    # BluePilot: Human turn detection and post-reset ramp (Phase 3)
+    self.human_turn = False
+    self.reset_steering_last = False
+    self.post_reset_ramp_active = False
+
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
+
+    # BluePilot: Update model data
+    self.sm.update(0)
+    if self.sm.updated['modelV2']:
+      self.model = self.sm['modelV2']
+
+    # BluePilot: Read toggleable params every 1s
+    if (self.frame % 100) == 0:
+      self.enable_lane_positioning = self.params.get_bool("enable_lane_positioning")
 
     actuators = CC.actuators
     hud_control = CC.hudControl
@@ -100,27 +141,173 @@ class CarController(CarControllerBase):
     ### lateral control ###
     # send steer msg at 20Hz
     if (self.frame % CarControllerParams.STEER_STEP) == 0:
-      # Bronco and some other cars consistently overshoot curv requests
-      # Apply some deadzone + smoothing convergence to avoid oscillations
-      if self.CP.carFingerprint in (CAR.FORD_BRONCO_SPORT_MK1, CAR.FORD_F_150_MK14):
-        self.anti_overshoot_curvature_last = anti_overshoot(actuators.curvature, self.anti_overshoot_curvature_last, CS.out.vEgoRaw)
-        apply_curvature = self.anti_overshoot_curvature_last
+      apply_curvature_rate = 0.0
+      apply_path_angle = 0.0
+      ramp_type = 0  # Slow (inactive default)
+
+      if CC.latActive:
+        ramp_type = 2  # Fast (active)
+
+        # Bronco and some other cars consistently overshoot curv requests
+        # Apply some deadzone + smoothing convergence to avoid oscillations
+        if self.CP.carFingerprint in (CAR.FORD_BRONCO_SPORT_MK1, CAR.FORD_F_150_MK14):
+          self.anti_overshoot_curvature_last = anti_overshoot(actuators.curvature, self.anti_overshoot_curvature_last, CS.out.vEgoRaw)
+          desired_curvature = self.anti_overshoot_curvature_last
+        else:
+          desired_curvature = actuators.curvature
+
+        # BluePilot: Predicted curvature blending (40% predicted, 60% desired)
+        if self.model is not None and len(self.model.orientationRate.z) >= 17:
+          curvatures = np.array(self.model.orientationRate.z) / max(0.01, CS.out.vEgoRaw)
+          predicted_curvature = float(np.interp(self.curvature_lookup_time, ModelConstants.T_IDXS, curvatures))
+        else:
+          predicted_curvature = desired_curvature
+
+        apply_curvature = (predicted_curvature * self.pc_blend_ratio) + (desired_curvature * (1 - self.pc_blend_ratio))
+
+        # BluePilot: Human turn detection (Phase 3)
+        human_turn = CS.out.steeringPressed and abs(CS.out.steeringAngleDeg) > 45.0
+        reset_steering = human_turn or (CS.out.vEgoRaw < 0.1)
+
+        if reset_steering:
+          apply_curvature = 0.0
+          ramp_type = 3  # Immediate
+          self.curvature_rate_deque.clear()
+          self.LC_PID_controller.reset()
+          self.post_reset_ramp_active = False
+        else:
+          # Detect transition out of reset — start post-reset ramp
+          if self.reset_steering_last and not reset_steering:
+            self.post_reset_ramp_active = True
+            self.apply_curvature_last = 0.0
+
+        self.reset_steering_last = reset_steering
+
+        # apply rate limits, curvature error limit, and clip to signal range
+        current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
+
+        self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
+                                                                CS.out.vEgoRaw, 0., CC.latActive, self.CP)
+
+        # Post-reset ramp: gradually ramp curvature from 0, keep path_angle=0 for ford.h bypass
+        if self.post_reset_ramp_active:
+          self.apply_curvature_last = apply_std_steer_angle_limits(apply_curvature, self.apply_curvature_last,
+                                                                   CS.out.vEgoRaw, 0., CC.latActive, CarControllerParams.ANGLE_LIMITS)
+          curvature_error = abs(apply_curvature - self.apply_curvature_last)
+          curvature_threshold = max(abs(apply_curvature) * 0.1, 0.001)
+          if curvature_error < curvature_threshold:
+            self.post_reset_ramp_active = False
+
+        if reset_steering:
+          self.apply_curvature_last = 0.0
+
+        # BluePilot: Curvature rate from derivative of predicted curvature
+        if not reset_steering:
+          self.curvature_rate_deque.append(predicted_curvature)
+        if len(self.curvature_rate_deque) > 1:
+          delta_t = (self.curvature_rate_delta_t if len(self.curvature_rate_deque) == self.curvature_rate_deque.maxlen
+                     else (len(self.curvature_rate_deque) - 1) * 0.05)
+          apply_curvature_rate = (self.curvature_rate_deque[-1] - self.curvature_rate_deque[0]) / delta_t / max(0.01, CS.out.vEgoRaw)
+        else:
+          apply_curvature_rate = 0.0
+
+        # Speed gating: disable curvature rate above 15.5 m/s
+        speed_factor = float(np.interp(CS.out.vEgoRaw, [0.0, 14.5, 15.5], [1.0, 1.0, 0.0]))
+        # Curvature gating: only active for curves > 0.008 1/m
+        curv_factor = float(np.interp(abs(predicted_curvature), [0.0, 0.008, 0.01], [0.0, 0.0, 1.0]))
+        apply_curvature_rate *= speed_factor * curv_factor
+        apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001023, 0.001023))
+
+        # BluePilot: Lane change handling
+        lane_change = self.model is not None and self.model.meta.laneChangeState in (1, 2, 3)
+        if lane_change:
+          factor = float(np.interp(CS.out.vEgoRaw, [4.4, 40.23], [0.95, 0.85]))
+          if self.model.meta.laneChangeDirection == 1 and self.apply_curvature_last < 0:
+            self.apply_curvature_last *= factor
+          elif self.model.meta.laneChangeDirection == 2 and self.apply_curvature_last > 0:
+            self.apply_curvature_last *= factor
+          apply_curvature_rate = 0.0
+          apply_path_angle = 0.0
+
+        # BluePilot: PID lane centering via path_angle (Phase 2, default OFF)
+        if (not reset_steering and not self.post_reset_ramp_active and not lane_change
+            and self.enable_lane_positioning and self.model is not None
+            and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2):
+          left_y = self.model.laneLines[1].y[0]
+          right_y = self.model.laneLines[2].y[0]
+          left_prob = self.model.laneLineProbs[1]
+          right_prob = self.model.laneLineProbs[2]
+
+          # Lane width tolerance scaling
+          lane_width = right_y + (-left_y)
+          width_tolerance = float(np.interp(lane_width, [3.75, 4.25], [0.81, 0.59]))
+
+          # Confidence: minimum of both lane probs and width tolerance
+          laneline_confidence = min(left_prob, right_prob, width_tolerance)
+
+          # Blend model position with laneline-based offset
+          laneline_scale = float(np.interp(laneline_confidence, [0.6, 0.8], [0.0, 1.0]))
+          path_offset_lanelines = (left_y + right_y) / 2
+          path_offset_position = float(np.interp(0.2, ModelConstants.T_IDXS, self.model.position.y))
+          path_offset_error = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
+
+          # Speed gating: disabled <9 m/s, full >15 m/s
+          lc_speed_factor = float(np.interp(CS.out.vEgoRaw, [0.0, 9.0, 15.0], [0.0, 0.0, 1.0]))
+          path_offset_error_adj = path_offset_error * lc_speed_factor
+
+          # PID controller → path_angle
+          apply_path_angle = float(self.LC_PID_controller.update(path_offset_error_adj))
+
+          # Rate limit path_angle
+          path_angle_roc = float(np.interp(CS.out.vEgoRaw, [5, 15, 25], [0.003, 0.0015, 0.002]))
+          apply_path_angle = float(np.clip(apply_path_angle, self.path_angle_last - path_angle_roc,
+                                           self.path_angle_last + path_angle_roc))
+
+          # Clip to signal range
+          apply_path_angle = float(np.clip(apply_path_angle, -0.5, 0.5))
+
+          # Reset PID on sustained steering press (>1.5s)
+          if CS.out.steeringPressed:
+            self.LC_path_angle_reset_counter += 1
+          else:
+            self.LC_path_angle_reset_counter = 0
+          if self.LC_path_angle_reset_counter > 30:
+            self.LC_PID_controller.reset()
+        else:
+          if reset_steering or not CC.latActive:
+            self.LC_PID_controller.reset()
+            self.LC_path_angle_reset_counter = 0
+          apply_path_angle = 0.0
+
+        self.path_angle_last = apply_path_angle
+
       else:
+        # Not latActive — zero everything
         apply_curvature = actuators.curvature
+        current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
+        self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
+                                                                CS.out.vEgoRaw, 0., CC.latActive, self.CP)
+        self.curvature_rate_deque.clear()
+        self.LC_PID_controller.reset()
+        self.LC_path_angle_reset_counter = 0
+        self.path_angle_last = 0.0
+        self.reset_steering_last = False
+        self.post_reset_ramp_active = False
+        apply_curvature_rate = 0.0
+        apply_path_angle = 0.0
+        ramp_type = 0
 
-      # apply rate limits, curvature error limit, and clip to signal range
-      current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
-
-      self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
-                                                              CS.out.vEgoRaw, 0., CC.latActive, self.CP)
-
+      # Send CAN message with ALL signals NEGATED
       if self.CP.flags & FordFlags.CANFD:
-        # TODO: extended mode with path_offset, path_angle, curvature_rate (BluePilot Phase 2 — disabled pending sign convention validation)
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
-        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode, 0., 0., -self.apply_curvature_last, 0., counter))
+        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode,
+                         0., -apply_path_angle, -self.apply_curvature_last, -apply_curvature_rate, counter,
+                         ramp_type=ramp_type, precision_type=1))
       else:
-        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive, 0., 0., -self.apply_curvature_last, 0.))
+        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive,
+                         0., -apply_path_angle, -self.apply_curvature_last, -apply_curvature_rate,
+                         ramp_type=ramp_type, precision_type=1))
 
     # send lka msg at 33Hz
     if (self.frame % CarControllerParams.LKA_STEP) == 0:
