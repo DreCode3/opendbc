@@ -79,25 +79,35 @@ static bool ford_get_quality_flag_valid(const CANPacket_t *msg) {
   return valid;
 }
 
+// Inactive signal values (CAN encoding offsets)
 #define FORD_INACTIVE_CURVATURE 1000U
 #define FORD_INACTIVE_CURVATURE_RATE 4096U
+#define FORD_INACTIVE_CURVATURE_RATE_CANFD 1024U
 #define FORD_INACTIVE_PATH_OFFSET 512U
 #define FORD_INACTIVE_PATH_ANGLE 1000U
 
-#define FORD_CANFD_INACTIVE_CURVATURE_RATE 1024U
+// Control signal physical limits (BluePilot 4-signal lateral control)
+#define FORD_CURVATURE_MIN -0.012f
+#define FORD_CURVATURE_MAX 0.012f
+#define FORD_CURVATURE_RATE_MIN -0.001024f
+#define FORD_CURVATURE_RATE_MAX 0.00102375f
+#define FORD_PATH_OFFSET_MIN -1.0f
+#define FORD_PATH_OFFSET_MAX 1.0f
+#define FORD_PATH_ANGLE_MIN -0.25f
+#define FORD_PATH_ANGLE_MAX 0.25f
 
-// Curvature rate limits
+// Curvature rate limits (BluePilot: 3-point interpolation, more permissive at low speed)
 #define FORD_LIMITS(limit_lateral_acceleration) {                                               \
   .max_angle = 1000,          /* 0.02 curvature */                                              \
   .angle_deg_to_can = 50000,  /* 1 / (2e-5) rad to can */                                       \
   .max_angle_error = 100,     /* 0.002 * FORD_STEERING_LIMITS.angle_deg_to_can */               \
   .angle_rate_up_lookup = {                                                                     \
-    {5., 25., 25.},                                                                             \
-    {0.00045, 0.0001, 0.0001}                                                                   \
+    {5., 16., 25.},                                                                             \
+    {0.0026, 0.0013, 0.0001}                                                                   \
   },                                                                                            \
   .angle_rate_down_lookup = {                                                                   \
-    {5., 25., 25.},                                                                             \
-    {0.00045, 0.00015, 0.00015}                                                                 \
+    {5., 16., 25.},                                                                             \
+    {0.0026, 0.0015, 0.0002}                                                                   \
   },                                                                                            \
                                                                                                 \
   /* no blending at low speed due to lack of torque wind-up and inaccurate current curvature */ \
@@ -108,7 +118,165 @@ static bool ford_get_quality_flag_valid(const CANPacket_t *msg) {
   .inactive_angle_is_zero = true,                                                               \
 }
 
+// Path angle rate limits (BluePilot)
+static const AngleSteeringLimits FORD_PATH_ANGLE_LIMITS = {
+  .max_angle = 1000,
+  .angle_deg_to_can = 2000,          // 1 / 0.0005 rad to CAN
+  .max_angle_error = 4,              // 0.002 * angle_deg_to_can
+  .angle_rate_up_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.003, 0.0015, 0.002}
+  },
+  .angle_rate_down_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.003, 0.0015, 0.002}
+  },
+  .angle_error_min_speed = 9.9,      // m/s
+  .frequency = 100U,                 // Hz
+
+  .enforce_angle_error = true,
+  .inactive_angle_is_zero = true,
+};
+
+// Path offset rate limits (BluePilot)
+static const AngleSteeringLimits FORD_PATH_OFFSET_LIMITS = {
+  .max_angle = 100,                  // 1.0 meter in CAN units (100 * 0.01)
+  .angle_deg_to_can = 100,           // 1 / 0.01 meter to CAN
+  .max_angle_error = 2,              // 0.02 * angle_deg_to_can
+  .angle_rate_up_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.05, 0.025, 0.01}
+  },
+  .angle_rate_down_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.05, 0.025, 0.01}
+  },
+  .angle_error_min_speed = 5.0,      // m/s
+  .frequency = 20U,                  // Hz
+
+  .enforce_angle_error = true,
+  .inactive_angle_is_zero = true,
+};
+
+// Curvature rate rate-of-change limits for CAN (BluePilot)
+static const AngleSteeringLimits FORD_CURVATURE_RATE_LIMITS_CAN = {
+  .max_angle = 100,
+  .angle_deg_to_can = 4000000,       // 1 / 2.5E-7 to CAN
+  .max_angle_error = 2,
+  .angle_rate_up_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.05, 0.025, 0.01}
+  },
+  .angle_rate_down_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.05, 0.025, 0.01}
+  },
+  .angle_error_min_speed = 5.0,      // m/s
+  .frequency = 20U,                  // Hz
+
+  .enforce_angle_error = true,
+  .inactive_angle_is_zero = true,
+};
+
+// Curvature rate rate-of-change limits for CANFD (BluePilot)
+static const AngleSteeringLimits FORD_CURVATURE_RATE_LIMITS_CANFD = {
+  .max_angle = 100,
+  .angle_deg_to_can = 1000000,       // 1 / 1E-6 to CAN
+  .max_angle_error = 2,
+  .angle_rate_up_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.05, 0.025, 0.01}
+  },
+  .angle_rate_down_lookup = {
+    .x = {5., 15., 25.},
+    .y = {0.05, 0.025, 0.01}
+  },
+  .angle_error_min_speed = 5.0,      // m/s
+  .frequency = 20U,                  // Hz
+
+  .enforce_angle_error = true,
+  .inactive_angle_is_zero = true,
+};
+
 static const AngleSteeringLimits FORD_STEERING_LIMITS = FORD_LIMITS(false);
+
+// State for 4-signal rate-of-change checks
+static int desired_path_angle_last = 0;
+static int desired_path_offset_last = 0;
+static int desired_curvature_rate_last = 0;
+
+// Reset bypass latch: allows rate limit bypass for ~3 seconds after steering reset
+// Activates when both curvature and path_angle are zero (reset state),
+// stays active for RESET_BYPASS_LATCH_DURATION frames to allow smooth ramp-up.
+// Value range checks are always enforced even during bypass.
+static uint8_t reset_bypass_latch_counter = 0;
+static const uint8_t RESET_BYPASS_LATCH_DURATION = 60;  // ~3.0 seconds at 20Hz
+
+// Rate-of-change check for path angle signal
+static bool path_angle_cmd_checks(int desired_path_angle, bool steer_control_enabled, const AngleSteeringLimits limits) {
+  bool violation = false;
+
+  if (steer_control_enabled) {
+    float speed = ((float)vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.;
+    int delta_path_angle_roc = (safety_interpolate(limits.angle_rate_up_lookup, speed) * limits.angle_deg_to_can) + 1.;
+
+    int highest_desired_path_angle = desired_path_angle_last + delta_path_angle_roc;
+    int lowest_desired_path_angle = desired_path_angle_last - delta_path_angle_roc;
+
+    violation |= safety_max_limit_check(desired_path_angle, highest_desired_path_angle, lowest_desired_path_angle);
+  }
+  desired_path_angle_last = desired_path_angle;
+
+  if (!steer_control_enabled) {
+    violation |= (desired_path_angle != 0);
+  }
+
+  return violation;
+}
+
+// Rate-of-change check for path offset signal
+static bool path_offset_cmd_checks(int desired_path_offset, bool steer_control_enabled, const AngleSteeringLimits limits) {
+  bool violation = false;
+
+  if (steer_control_enabled) {
+    float speed = ((float)vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.;
+    int delta_path_offset_roc = (safety_interpolate(limits.angle_rate_up_lookup, speed) * limits.angle_deg_to_can) + 1.;
+
+    int highest_desired_path_offset = desired_path_offset_last + delta_path_offset_roc;
+    int lowest_desired_path_offset = desired_path_offset_last - delta_path_offset_roc;
+
+    violation |= safety_max_limit_check(desired_path_offset, highest_desired_path_offset, lowest_desired_path_offset);
+  }
+  desired_path_offset_last = desired_path_offset;
+
+  if (!steer_control_enabled) {
+    violation |= (desired_path_offset != 0);
+  }
+
+  return violation;
+}
+
+// Rate-of-change check for curvature rate signal
+static bool curvature_rate_cmd_checks(int desired_curvature_rate, bool steer_control_enabled, const AngleSteeringLimits limits) {
+  bool violation = false;
+
+  if (steer_control_enabled) {
+    float speed = ((float)vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.;
+    int desired_curvature_rate_roc = (safety_interpolate(limits.angle_rate_up_lookup, speed) * limits.angle_deg_to_can) + 1.;
+
+    int highest_desired_curvature_rate = desired_curvature_rate_last + desired_curvature_rate_roc;
+    int lowest_desired_curvature_rate = desired_curvature_rate_last - desired_curvature_rate_roc;
+
+    violation |= safety_max_limit_check(desired_curvature_rate, highest_desired_curvature_rate, lowest_desired_curvature_rate);
+  }
+  desired_curvature_rate_last = desired_curvature_rate;
+
+  if (!steer_control_enabled) {
+    violation |= (desired_curvature_rate != 0);
+  }
+
+  return violation;
+}
 
 static void ford_rx_hook(const CANPacket_t *msg) {
   if (msg->bus == FORD_MAIN_BUS) {
@@ -135,7 +303,6 @@ static void ford_rx_hook(const CANPacket_t *msg) {
     // Update vehicle yaw rate
     if (msg->addr == FORD_Yaw_Data_FD1) {
       // Signal: VehYaw_W_Actl
-      // TODO: we should use the speed which results in the closest angle measurement to the desired angle
       float ford_yaw_rate = (((msg->data[2] << 8U) | msg->data[3]) * 0.0002) - 6.5;
       float current_curvature = ford_yaw_rate / SAFETY_MAX(vehicle_speed.values[0] / VEHICLE_SPEED_FACTOR, 0.1);
       // convert current curvature into units on CAN for comparison with desired curvature
@@ -240,7 +407,8 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
     }
   }
 
-  // Safety check for LateralMotionControl action
+  // Safety check for LateralMotionControl action (CAN)
+  // BluePilot 4-signal lateral control: checks value ranges and rate-of-change for all signals
   if (msg->addr == FORD_LateralMotionControl) {
     // Signal: LatCtl_D_Rq
     bool steer_control_enabled = ((msg->data[4] >> 2) & 0x7U) != 0U;
@@ -249,19 +417,61 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
     unsigned int raw_path_angle = (msg->data[3] << 3) | (msg->data[4] >> 5);
     unsigned int raw_path_offset = (msg->data[5] << 2) | (msg->data[6] >> 6);
 
-    // These signals are not yet tested with the current safety limits
-    bool violation = (raw_curvature_rate != FORD_INACTIVE_CURVATURE_RATE) || (raw_path_angle != FORD_INACTIVE_PATH_ANGLE) || (raw_path_offset != FORD_INACTIVE_PATH_OFFSET);
+    bool violation = false;
 
-    // Check angle error and steer_control_enabled
-    int desired_curvature = raw_curvature - FORD_INACTIVE_CURVATURE;  // /FORD_STEERING_LIMITS.angle_deg_to_can to get real curvature
+    // Check curvature value limits
+    int desired_curvature = raw_curvature - FORD_INACTIVE_CURVATURE;
+    int curvature_min_can = (int)(FORD_CURVATURE_MIN * FORD_STEERING_LIMITS.angle_deg_to_can);
+    int curvature_max_can = (int)(FORD_CURVATURE_MAX * FORD_STEERING_LIMITS.angle_deg_to_can);
+    violation |= (desired_curvature < curvature_min_can) || (desired_curvature > curvature_max_can);
+
+    // Check curvature rate value limits
+    int desired_curvature_rate = raw_curvature_rate - FORD_INACTIVE_CURVATURE_RATE;
+    int curvature_rate_min_can = (int)(FORD_CURVATURE_RATE_MIN * FORD_CURVATURE_RATE_LIMITS_CAN.angle_deg_to_can);
+    int curvature_rate_max_can = (int)(FORD_CURVATURE_RATE_MAX * FORD_CURVATURE_RATE_LIMITS_CAN.angle_deg_to_can);
+    violation |= (desired_curvature_rate < curvature_rate_min_can) || (desired_curvature_rate > curvature_rate_max_can);
+
+    // Check path offset value limits
+    int desired_path_offset = raw_path_offset - FORD_INACTIVE_PATH_OFFSET;
+    int path_offset_min_can = (int)(FORD_PATH_OFFSET_MIN * FORD_PATH_OFFSET_LIMITS.angle_deg_to_can);
+    int path_offset_max_can = (int)(FORD_PATH_OFFSET_MAX * FORD_PATH_OFFSET_LIMITS.angle_deg_to_can);
+    violation |= (desired_path_offset < path_offset_min_can) || (desired_path_offset > path_offset_max_can);
+
+    // Check path angle value limits
+    int desired_path_angle = raw_path_angle - FORD_INACTIVE_PATH_ANGLE;
+    int path_angle_min_can = (int)(FORD_PATH_ANGLE_MIN * FORD_PATH_ANGLE_LIMITS.angle_deg_to_can);
+    int path_angle_max_can = (int)(FORD_PATH_ANGLE_MAX * FORD_PATH_ANGLE_LIMITS.angle_deg_to_can);
+    violation |= (desired_path_angle < path_angle_min_can) || (desired_path_angle > path_angle_max_can);
+
+    // Check curvature angle error and rate limits
     violation |= steer_angle_cmd_checks(desired_curvature, steer_control_enabled, FORD_STEERING_LIMITS);
+
+    // Check path angle rate of change
+    violation |= path_angle_cmd_checks(desired_path_angle, steer_control_enabled, FORD_PATH_ANGLE_LIMITS);
+
+    // Check path offset rate of change
+    violation |= path_offset_cmd_checks(desired_path_offset, steer_control_enabled, FORD_PATH_OFFSET_LIMITS);
+
+    // Check curvature rate rate of change
+    violation |= curvature_rate_cmd_checks(desired_curvature_rate, steer_control_enabled, FORD_CURVATURE_RATE_LIMITS_CAN);
+
+    // Reset bypass latch: when both curvature and path_angle are zero (reset/neutral state),
+    // activate a timed bypass to allow smooth ramp-up after human turn detection.
+    // Value range checks above are always enforced; only rate-of-change checks are bypassed.
+    if ((desired_curvature == 0) && (desired_path_angle == 0)) {
+      reset_bypass_latch_counter = RESET_BYPASS_LATCH_DURATION;
+      violation = false;
+    } else if (reset_bypass_latch_counter > 0) {
+      reset_bypass_latch_counter--;
+      violation = false;
+    }
 
     if (violation) {
       tx = false;
     }
   }
 
-  // Safety check for LateralMotionControl2 action
+  // Safety check for LateralMotionControl2 action (CANFD)
   if (msg->addr == FORD_LateralMotionControl2) {
     static const AngleSteeringLimits FORD_CANFD_STEERING_LIMITS = FORD_LIMITS(true);
 
@@ -272,12 +482,52 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
     unsigned int raw_path_angle = ((msg->data[3] & 0x1FU) << 6) | (msg->data[4] >> 2);
     unsigned int raw_path_offset = ((msg->data[4] & 0x3U) << 8) | msg->data[5];
 
-    // These signals are not yet tested with the current safety limits
-    bool violation = (raw_curvature_rate != FORD_CANFD_INACTIVE_CURVATURE_RATE) || (raw_path_angle != FORD_INACTIVE_PATH_ANGLE) || (raw_path_offset != FORD_INACTIVE_PATH_OFFSET);
+    bool violation = false;
 
-    // Check angle error and steer_control_enabled
-    int desired_curvature = raw_curvature - FORD_INACTIVE_CURVATURE;  // /FORD_STEERING_LIMITS.angle_deg_to_can to get real curvature
+    // Check curvature value limits
+    int desired_curvature = raw_curvature - FORD_INACTIVE_CURVATURE;
+    int curvature_min_can = (int)(FORD_CURVATURE_MIN * FORD_STEERING_LIMITS.angle_deg_to_can);
+    int curvature_max_can = (int)(FORD_CURVATURE_MAX * FORD_STEERING_LIMITS.angle_deg_to_can);
+    violation |= (desired_curvature < curvature_min_can) || (desired_curvature > curvature_max_can);
+
+    // Check curvature rate value limits
+    int desired_curvature_rate = raw_curvature_rate - FORD_INACTIVE_CURVATURE_RATE_CANFD;
+    int curvature_rate_min_can = (int)(FORD_CURVATURE_RATE_MIN * FORD_CURVATURE_RATE_LIMITS_CANFD.angle_deg_to_can);
+    int curvature_rate_max_can = (int)(FORD_CURVATURE_RATE_MAX * FORD_CURVATURE_RATE_LIMITS_CANFD.angle_deg_to_can);
+    violation |= (desired_curvature_rate < curvature_rate_min_can) || (desired_curvature_rate > curvature_rate_max_can);
+
+    // Check path offset value limits
+    int desired_path_offset = raw_path_offset - FORD_INACTIVE_PATH_OFFSET;
+    int path_offset_min_can = (int)(FORD_PATH_OFFSET_MIN * FORD_PATH_OFFSET_LIMITS.angle_deg_to_can);
+    int path_offset_max_can = (int)(FORD_PATH_OFFSET_MAX * FORD_PATH_OFFSET_LIMITS.angle_deg_to_can);
+    violation |= (desired_path_offset < path_offset_min_can) || (desired_path_offset > path_offset_max_can);
+
+    // Check path angle value limits
+    int desired_path_angle = raw_path_angle - FORD_INACTIVE_PATH_ANGLE;
+    int path_angle_min_can = (int)(FORD_PATH_ANGLE_MIN * FORD_PATH_ANGLE_LIMITS.angle_deg_to_can);
+    int path_angle_max_can = (int)(FORD_PATH_ANGLE_MAX * FORD_PATH_ANGLE_LIMITS.angle_deg_to_can);
+    violation |= (desired_path_angle < path_angle_min_can) || (desired_path_angle > path_angle_max_can);
+
+    // Check curvature angle error and rate limits
     violation |= steer_angle_cmd_checks(desired_curvature, steer_control_enabled, FORD_CANFD_STEERING_LIMITS);
+
+    // Check path angle rate of change
+    violation |= path_angle_cmd_checks(desired_path_angle, steer_control_enabled, FORD_PATH_ANGLE_LIMITS);
+
+    // Check path offset rate of change
+    violation |= path_offset_cmd_checks(desired_path_offset, steer_control_enabled, FORD_PATH_OFFSET_LIMITS);
+
+    // Check curvature rate rate of change
+    violation |= curvature_rate_cmd_checks(desired_curvature_rate, steer_control_enabled, FORD_CURVATURE_RATE_LIMITS_CANFD);
+
+    // Reset bypass latch (same as CAN version above)
+    if ((desired_curvature == 0) && (desired_path_angle == 0)) {
+      reset_bypass_latch_counter = RESET_BYPASS_LATCH_DURATION;
+      violation = false;
+    } else if (reset_bypass_latch_counter > 0) {
+      reset_bypass_latch_counter--;
+      violation = false;
+    }
 
     if (violation) {
       tx = false;

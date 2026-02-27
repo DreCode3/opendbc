@@ -28,9 +28,10 @@ class CarControllerParams:
     # Max curvature is limited by the EPS to an equivalent of ~2.0 m/s^2 at all speeds,
     #  however max curvature rate linearly decreases as speed increases:
     #  ~0.009 m^-1/sec at 7 m/s, ~0.002 m^-1/sec at 35 m/s
-    # Limit to ~2 m/s^3 up, ~3.3 m/s^3 down at 75 mph and match EPS limit at low speed
-    ([5, 25], [0.00045, 0.0001]),
-    ([5, 25], [0.00045, 0.00015])
+    # BluePilot values: more permissive at low speed for parking/tight turns,
+    # 3-point interpolation with 16 m/s midpoint for smoother transition
+    ([5, 16, 25], [0.0025, 0.0012, 0.00008]),
+    ([5, 16, 25], [0.0025, 0.0014, 0.00018])
   )
   CURVATURE_ERROR = 0.002  # ~6 degrees at 10 m/s, ~10 degrees at 35 m/s
 
@@ -51,6 +52,7 @@ class FordSafetyFlags(IntFlag):
 class FordFlags(IntFlag):
   # Static flags
   CANFD = 1
+  ALT_STEER_ANGLE = 2
 
 
 class RADAR:
