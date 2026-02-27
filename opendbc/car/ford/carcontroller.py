@@ -1,5 +1,4 @@
 import math
-import cereal.messaging as messaging
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs
@@ -7,7 +6,6 @@ from opendbc.car.lateral import ISO_LATERAL_ACCEL, apply_std_steer_angle_limits
 from opendbc.car.ford import fordcan
 from opendbc.car.ford.values import CarControllerParams, FordFlags, CAR
 from opendbc.car.interfaces import CarControllerBase, V_CRUISE_MAX
-from selfdrive.modeld.constants import ModelConstants
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -77,38 +75,11 @@ class CarController(CarControllerBase):
     self.lead_distance_bars_last = None
     self.distance_bar_frame = 0
 
-    # Predicted curvature blending (BluePilot)
-    self.sm = messaging.SubMaster(['modelV2', 'drivingModelData'])
-    self.model = None
-    self.curvature_lookup_time = 0.42  # seconds ahead to sample predicted curvature
-    # Blend ratio: 40% predicted curvature, 60% desired curvature (same for CAN and CANFD)
-    self.pc_blend_bp = [0.0, 0.001]    # curvature breakpoints (1/m)
-    self.pc_blend_v = [0.40, 0.40]     # blend ratio at each breakpoint
-
-    # PID lane centering for path_angle signal (BluePilot)
-    self.lc_pid_k_p = 0.25            # Proportional gain
-    self.lc_pid_k_i = 0.05            # Integral gain
-    self.lc_pid_integral = 0.0
-    self.lc_pid_prev_error = 0.0
-    self.lc_pid_gain = 5.0            # CAN output scaling (BluePilot LC_PID_GAIN_CAN)
-    self.path_angle_max = 0.5         # radians, clamp limit
-    self.path_offset_max = 2.0        # meters, clamp limit
-    self.lane_conf_threshold = 0.6    # minimum lane line probability for PID
-
-    # Curvature rate signal
-    self.curvature_rate_dt = 1.0 / 20.0  # 20 Hz update rate
-
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
 
     actuators = CC.actuators
     hud_control = CC.hudControl
-
-    # Update model data from SubMaster
-    self.sm.update(0)
-    if self.sm.updated['modelV2']:
-      self.model = self.sm['modelV2']
-    dm_data = self.sm['drivingModelData'] if self.sm.updated['drivingModelData'] else None
 
     main_on = CS.out.cruiseState.available
     steer_alert = hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw)
@@ -137,78 +108,19 @@ class CarController(CarControllerBase):
       else:
         apply_curvature = actuators.curvature
 
-      # Blend predicted curvature from model with desired curvature (BluePilot)
-      # Predicted curvature leads desired, reducing phase lag through curves
-      if self.model is not None and len(self.model.orientationRate.z) >= 17:
-        curvatures = np.array(self.model.orientationRate.z) / max(CS.out.vEgoRaw, 0.01)
-        predicted_curvature = float(np.interp(self.curvature_lookup_time, ModelConstants.T_IDXS, curvatures))
-        blend_ratio = float(np.interp(abs(apply_curvature), self.pc_blend_bp, self.pc_blend_v))
-        apply_curvature = predicted_curvature * blend_ratio + apply_curvature * (1.0 - blend_ratio)
-
       # apply rate limits, curvature error limit, and clip to signal range
       current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
 
       self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
                                                               CS.out.vEgoRaw, 0., CC.latActive, self.CP)
 
-      # Compute curvature rate (time derivative of curvature) for EPS anticipation
-      apply_curvature_rate = (self.apply_curvature_last - getattr(self, '_prev_apply_curvature', 0.0)) / self.curvature_rate_dt
-      apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001024, 0.00102375))
-      self._prev_apply_curvature = self.apply_curvature_last
-
-      # PID lane centering: compute path_angle and path_offset from lane position error (BluePilot)
-      apply_path_angle = 0.0
-      apply_path_offset = 0.0
-
-      if CC.latActive and dm_data is not None:
-        left_y = float(getattr(dm_data.laneLineMeta, 'leftY', math.nan))
-        right_y = float(getattr(dm_data.laneLineMeta, 'rightY', math.nan))
-        left_prob = float(getattr(dm_data.laneLineMeta, 'leftProb', 0.0))
-        right_prob = float(getattr(dm_data.laneLineMeta, 'rightProb', 0.0))
-
-        if (np.isfinite(left_y) and np.isfinite(right_y) and
-            left_prob >= self.lane_conf_threshold and right_prob >= self.lane_conf_threshold):
-          lane_width = right_y - left_y
-          if 2.8 < lane_width < 4.2:
-            # Lane center error: positive = right of center
-            lane_center_error = 0.5 * (left_y + right_y)
-
-            # PID controller for path_angle
-            self.lc_pid_integral += lane_center_error * self.curvature_rate_dt
-            self.lc_pid_integral = float(np.clip(self.lc_pid_integral, -2.0, 2.0))  # anti-windup
-
-            pid_output = (self.lc_pid_k_p * lane_center_error +
-                          self.lc_pid_k_i * self.lc_pid_integral)
-
-            apply_path_angle = pid_output * self.lc_pid_gain
-            apply_path_angle = float(np.clip(apply_path_angle, -self.path_angle_max, self.path_angle_max))
-
-            # Path offset directly from lane center error
-            apply_path_offset = float(np.clip(lane_center_error, -self.path_offset_max, self.path_offset_max))
-
-            self.lc_pid_prev_error = lane_center_error
-          else:
-            # Lane width out of range, reset PID
-            self.lc_pid_integral = 0.0
-        else:
-          # Low confidence, ramp down PID
-          self.lc_pid_integral *= 0.95  # gradual decay
-      else:
-        # Not active, reset PID state
-        self.lc_pid_integral = 0.0
-        apply_curvature_rate = 0.0
-
       if self.CP.flags & FordFlags.CANFD:
-        # Ford 4-signal lateral control (BluePilot)
+        # TODO: extended mode with path_offset, path_angle, curvature_rate (BluePilot Phase 2 — disabled pending sign convention validation)
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
-        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode,
-                                                      apply_path_offset, apply_path_angle,
-                                                      -self.apply_curvature_last, -apply_curvature_rate, counter))
+        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode, 0., 0., -self.apply_curvature_last, 0., counter))
       else:
-        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive,
-                                                     apply_path_offset, apply_path_angle,
-                                                     -self.apply_curvature_last, -apply_curvature_rate))
+        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive, 0., 0., -self.apply_curvature_last, 0.))
 
     # send lka msg at 33Hz
     if (self.frame % CarControllerParams.LKA_STEP) == 0:
