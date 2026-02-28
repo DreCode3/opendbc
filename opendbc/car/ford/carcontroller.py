@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from collections import deque
-from cereal import messaging
+from cereal import log, messaging
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs
 from opendbc.car.lateral import ISO_LATERAL_ACCEL, apply_std_steer_angle_limits
@@ -14,6 +14,8 @@ from openpilot.common.params import Params
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
+LaneChangeState = log.LaneChangeState
+LaneChangeDirection = log.LaneChangeDirection
 
 # CAN FD limits:
 # Limit to average banked road since safety doesn't have the roll
@@ -221,12 +223,13 @@ class CarController(CarControllerBase):
         apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001023, 0.001023))
 
         # BluePilot: Lane change handling
-        lane_change = self.model is not None and self.model.meta.laneChangeState in (1, 2, 3)
+        lane_change = self.model is not None and self.model.meta.laneChangeState in (
+          LaneChangeState.preLaneChange, LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing)
         if lane_change:
           factor = float(np.interp(CS.out.vEgoRaw, [4.4, 40.23], [0.95, 0.85]))
-          if self.model.meta.laneChangeDirection == 1 and self.apply_curvature_last < 0:
+          if self.model.meta.laneChangeDirection == LaneChangeDirection.left and self.apply_curvature_last < 0:
             self.apply_curvature_last *= factor
-          elif self.model.meta.laneChangeDirection == 2 and self.apply_curvature_last > 0:
+          elif self.model.meta.laneChangeDirection == LaneChangeDirection.right and self.apply_curvature_last > 0:
             self.apply_curvature_last *= factor
           apply_curvature_rate = 0.0
           apply_path_angle = 0.0
