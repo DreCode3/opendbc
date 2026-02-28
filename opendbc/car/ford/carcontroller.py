@@ -9,7 +9,6 @@ from opendbc.car.ford import fordcan
 from opendbc.car.ford.values import CarControllerParams, FordFlags, CAR
 from opendbc.car.interfaces import CarControllerBase, V_CRUISE_MAX
 from selfdrive.modeld.constants import ModelConstants
-from common.pid import PIDController
 from openpilot.common.params import Params
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -96,11 +95,9 @@ class CarController(CarControllerBase):
     self.curvature_rate_delta_t = 0.3  # seconds
     self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
 
-    # BluePilot: PID lane centering (Phase 2, default OFF)
+    # Lane centering via curvature offset (Phase 2, default OFF)
     self.enable_lane_positioning = False
-    self.LC_PID_controller = PIDController(k_p=0.03, k_i=0.0, rate=20, pos_limit=0.05, neg_limit=-0.05)
-    self.path_angle_last = 0.0
-    self.LC_path_angle_reset_counter = 0
+    self.centering_gain = 0.0003  # curvature offset per meter of lane offset
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
     self.reset_steering_last = False
@@ -144,7 +141,6 @@ class CarController(CarControllerBase):
         self.model = self.sm['modelV2']
 
       apply_curvature_rate = 0.0
-      apply_path_angle = 0.0
       ramp_type = 0  # Slow (inactive default)
 
       if CC.latActive:
@@ -168,6 +164,24 @@ class CarController(CarControllerBase):
 
         apply_curvature = (predicted_curvature * self.pc_blend_ratio) + (desired_curvature * (1 - self.pc_blend_ratio))
 
+        # Lane centering: add small curvature offset based on lane position error
+        if (self.enable_lane_positioning and self.model is not None
+            and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2
+            and CS.out.vEgoRaw > 15.0):
+          left_y = self.model.laneLines[1].y[0]
+          right_y = self.model.laneLines[2].y[0]
+          left_prob = self.model.laneLineProbs[1]
+          right_prob = self.model.laneLineProbs[2]
+          lane_width = right_y + (-left_y)
+          width_tolerance = float(np.interp(lane_width, [3.75, 4.25], [0.81, 0.59]))
+          laneline_confidence = min(left_prob, right_prob, width_tolerance)
+          if laneline_confidence > 0.6:
+            laneline_scale = float(np.interp(laneline_confidence, [0.6, 0.8], [0.0, 1.0]))
+            path_offset_lanelines = (left_y + right_y) / 2
+            path_offset_position = float(np.interp(0.2, ModelConstants.T_IDXS, self.model.position.y))
+            lane_offset = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
+            apply_curvature += lane_offset * self.centering_gain
+
         # BluePilot: Human turn detection (Phase 3)
         # Only trigger on actual human steering override, NOT at standstill
         human_turn = CS.out.steeringPressed and abs(CS.out.steeringAngleDeg) > 45.0
@@ -177,7 +191,6 @@ class CarController(CarControllerBase):
           apply_curvature = 0.0
           ramp_type = 3  # Immediate
           self.curvature_rate_deque.clear()
-          self.LC_PID_controller.reset()
           self.post_reset_ramp_active = False
         else:
           # Detect transition out of reset — start post-reset ramp
@@ -232,63 +245,6 @@ class CarController(CarControllerBase):
           elif self.model.meta.laneChangeDirection == LaneChangeDirection.right and self.apply_curvature_last > 0:
             self.apply_curvature_last *= factor
           apply_curvature_rate = 0.0
-          apply_path_angle = 0.0
-
-        # BluePilot: PID lane centering via path_angle (Phase 2, default OFF)
-        if (not reset_steering and not self.post_reset_ramp_active and not lane_change
-            and self.enable_lane_positioning and self.model is not None
-            and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2):
-          left_y = self.model.laneLines[1].y[0]
-          right_y = self.model.laneLines[2].y[0]
-          left_prob = self.model.laneLineProbs[1]
-          right_prob = self.model.laneLineProbs[2]
-
-          # Lane width tolerance scaling
-          lane_width = right_y + (-left_y)
-          width_tolerance = float(np.interp(lane_width, [3.75, 4.25], [0.81, 0.59]))
-
-          # Confidence: minimum of both lane probs and width tolerance
-          laneline_confidence = min(left_prob, right_prob, width_tolerance)
-
-          # Blend model position with laneline-based offset
-          laneline_scale = float(np.interp(laneline_confidence, [0.6, 0.8], [0.0, 1.0]))
-          path_offset_lanelines = (left_y + right_y) / 2
-          path_offset_position = float(np.interp(0.2, ModelConstants.T_IDXS, self.model.position.y))
-          path_offset_error = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
-
-          # Deadzone: ignore errors < 0.1m to avoid chasing lane line noise
-          if abs(path_offset_error) < 0.1:
-            path_offset_error = 0.0
-
-          # Speed gating: disabled <9 m/s, full >15 m/s
-          lc_speed_factor = float(np.interp(CS.out.vEgoRaw, [0.0, 9.0, 15.0], [0.0, 0.0, 1.0]))
-          path_offset_error_adj = path_offset_error * lc_speed_factor
-
-          # P-only controller → path_angle (no integrator to avoid fighting curvature loop)
-          apply_path_angle = float(self.LC_PID_controller.update(path_offset_error_adj))
-
-          # Rate limit path_angle
-          path_angle_roc = float(np.interp(CS.out.vEgoRaw, [5, 15, 25], [0.003, 0.0015, 0.002]))
-          apply_path_angle = float(np.clip(apply_path_angle, self.path_angle_last - path_angle_roc,
-                                           self.path_angle_last + path_angle_roc))
-
-          # Clip to conservative range (safety layer allows ±0.25, but EPAS is very sensitive)
-          apply_path_angle = float(np.clip(apply_path_angle, -0.05, 0.05))
-
-          # Reset PID on sustained steering press (>1.5s)
-          if CS.out.steeringPressed:
-            self.LC_path_angle_reset_counter += 1
-          else:
-            self.LC_path_angle_reset_counter = 0
-          if self.LC_path_angle_reset_counter > 30:
-            self.LC_PID_controller.reset()
-        else:
-          if reset_steering or not CC.latActive:
-            self.LC_PID_controller.reset()
-            self.LC_path_angle_reset_counter = 0
-          apply_path_angle = 0.0
-
-        self.path_angle_last = apply_path_angle
 
       else:
         # Not latActive — zero everything
@@ -297,25 +253,21 @@ class CarController(CarControllerBase):
         self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
                                                                 CS.out.vEgoRaw, 0., CC.latActive, self.CP)
         self.curvature_rate_deque.clear()
-        self.LC_PID_controller.reset()
-        self.LC_path_angle_reset_counter = 0
-        self.path_angle_last = 0.0
         self.reset_steering_last = False
         self.post_reset_ramp_active = False
         apply_curvature_rate = 0.0
-        apply_path_angle = 0.0
         ramp_type = 0
 
-      # Send CAN message with ALL signals NEGATED
+      # Send CAN message: path_offset=0, path_angle=0, curvature+rate NEGATED
       if self.CP.flags & FordFlags.CANFD:
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
         can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode,
-                         0., -apply_path_angle, -self.apply_curvature_last, -apply_curvature_rate, counter,
+                         0., 0., -self.apply_curvature_last, -apply_curvature_rate, counter,
                          ramp_type=ramp_type, precision_type=1))
       else:
         can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive,
-                         0., -apply_path_angle, -self.apply_curvature_last, -apply_curvature_rate,
+                         0., 0., -self.apply_curvature_last, -apply_curvature_rate,
                          ramp_type=ramp_type, precision_type=1))
 
     # send lka msg at 33Hz
