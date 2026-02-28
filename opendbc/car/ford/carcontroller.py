@@ -89,7 +89,7 @@ class CarController(CarControllerBase):
 
     # BluePilot: Predicted curvature blending
     self.curvature_lookup_time = 0.2  # seconds
-    self.pc_blend_ratio = 0.40  # 40% predicted, 60% desired
+    self.pc_blend_ratio = 0.20  # 20% predicted, 80% desired
 
     # BluePilot: Curvature rate computation
     self.curvature_rate_delta_t = 0.3  # seconds
