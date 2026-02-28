@@ -93,17 +93,14 @@ class CarController(CarControllerBase):
     # BluePilot: Curvature rate computation
     self.curvature_rate_delta_t = 0.3  # seconds
     self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
-    self.curvature_rate_last = 0.0
 
     # BluePilot: PID lane centering (Phase 2, default OFF)
     self.enable_lane_positioning = False
-    self.LC_PID_controller = PIDController(k_p=0.25, k_i=0.05, rate=20)
-    self.LC_PID_GAIN = 5.0
+    self.LC_PID_controller = PIDController(k_p=0.25, k_i=0.05, rate=20, pos_limit=0.25, neg_limit=-0.25)
     self.path_angle_last = 0.0
     self.LC_path_angle_reset_counter = 0
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
-    self.human_turn = False
     self.reset_steering_last = False
     self.post_reset_ramp_active = False
 
@@ -209,10 +206,10 @@ class CarController(CarControllerBase):
         # BluePilot: Curvature rate from derivative of predicted curvature
         if not reset_steering:
           self.curvature_rate_deque.append(predicted_curvature)
-        if len(self.curvature_rate_deque) > 1:
+        if CS.out.vEgoRaw > 1.0 and len(self.curvature_rate_deque) > 1:
           delta_t = (self.curvature_rate_delta_t if len(self.curvature_rate_deque) == self.curvature_rate_deque.maxlen
                      else (len(self.curvature_rate_deque) - 1) * 0.05)
-          apply_curvature_rate = (self.curvature_rate_deque[-1] - self.curvature_rate_deque[0]) / delta_t / max(0.01, CS.out.vEgoRaw)
+          apply_curvature_rate = (self.curvature_rate_deque[-1] - self.curvature_rate_deque[0]) / delta_t / CS.out.vEgoRaw
         else:
           apply_curvature_rate = 0.0
 
@@ -268,8 +265,8 @@ class CarController(CarControllerBase):
           apply_path_angle = float(np.clip(apply_path_angle, self.path_angle_last - path_angle_roc,
                                            self.path_angle_last + path_angle_roc))
 
-          # Clip to signal range
-          apply_path_angle = float(np.clip(apply_path_angle, -0.5, 0.5))
+          # Clip to safety-layer range (ford.h FORD_PATH_ANGLE_MIN/MAX: -0.25/0.25)
+          apply_path_angle = float(np.clip(apply_path_angle, -0.25, 0.25))
 
           # Reset PID on sustained steering press (>1.5s)
           if CS.out.steeringPressed:
