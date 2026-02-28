@@ -98,7 +98,7 @@ class CarController(CarControllerBase):
 
     # BluePilot: PID lane centering (Phase 2, default OFF)
     self.enable_lane_positioning = False
-    self.LC_PID_controller = PIDController(k_p=0.25, k_i=0.05, rate=20, pos_limit=0.25, neg_limit=-0.25)
+    self.LC_PID_controller = PIDController(k_p=0.03, k_i=0.005, rate=20, pos_limit=0.05, neg_limit=-0.05)
     self.path_angle_last = 0.0
     self.LC_path_angle_reset_counter = 0
 
@@ -268,8 +268,8 @@ class CarController(CarControllerBase):
           apply_path_angle = float(np.clip(apply_path_angle, self.path_angle_last - path_angle_roc,
                                            self.path_angle_last + path_angle_roc))
 
-          # Clip to safety-layer range (ford.h FORD_PATH_ANGLE_MIN/MAX: -0.25/0.25)
-          apply_path_angle = float(np.clip(apply_path_angle, -0.25, 0.25))
+          # Clip to conservative range (safety layer allows ±0.25, but EPAS is very sensitive)
+          apply_path_angle = float(np.clip(apply_path_angle, -0.05, 0.05))
 
           # Reset PID on sustained steering press (>1.5s)
           if CS.out.steeringPressed:
