@@ -30,10 +30,10 @@ class CarControllerParams:
     #  ~0.009 m^-1/sec at 7 m/s, ~0.002 m^-1/sec at 35 m/s
     # BluePilot values: more permissive at low speed for parking/tight turns,
     # 3-point interpolation with 16 m/s midpoint for smoother transition
-    ([5, 16, 25], [0.0025, 0.0012, 0.00008]),
-    ([5, 16, 25], [0.0025, 0.0014, 0.00018])
+    ([5, 16, 25], [0.0025, 0.0012, 0.00015]),
+    ([5, 16, 25], [0.0025, 0.0014, 0.00025])
   )
-  CURVATURE_ERROR = 0.002  # ~6 degrees at 10 m/s, ~10 degrees at 35 m/s
+  CURVATURE_ERROR = 0.004  # doubled from 0.002 to allow faster curve entry
 
   ACCEL_MAX = 2.0               # m/s^2 max acceleration
   ACCEL_MIN = -3.5              # m/s^2 max deceleration

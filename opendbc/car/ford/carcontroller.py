@@ -88,7 +88,7 @@ class CarController(CarControllerBase):
     self.model = None
 
     # BluePilot: Predicted curvature blending
-    self.curvature_lookup_time = 0.2  # seconds
+    self.curvature_lookup_time = 0.5  # seconds (0.2 was too short for curve anticipation)
     self.pc_blend_ratio = 0.40  # 40% predicted, 60% desired
 
     # BluePilot: Curvature rate computation
@@ -228,11 +228,9 @@ class CarController(CarControllerBase):
         else:
           apply_curvature_rate = 0.0
 
-        # Speed gating: disable curvature rate above 15.5 m/s
-        speed_factor = float(np.interp(CS.out.vEgoRaw, [0.0, 14.5, 15.5], [1.0, 1.0, 0.0]))
-        # Curvature gating: only active for curves > 0.008 1/m
-        curv_factor = float(np.interp(abs(predicted_curvature), [0.0, 0.008, 0.01], [0.0, 0.0, 1.0]))
-        apply_curvature_rate *= speed_factor * curv_factor
+        # Curvature gating: only active for curves > 0.001 1/m (no speed gate)
+        curv_factor = float(np.interp(abs(predicted_curvature), [0.0, 0.001, 0.002], [0.0, 0.0, 1.0]))
+        apply_curvature_rate *= curv_factor
         apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001023, 0.001023))
 
         # BluePilot: Lane change handling
