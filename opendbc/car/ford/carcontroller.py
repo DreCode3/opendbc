@@ -98,7 +98,7 @@ class CarController(CarControllerBase):
 
     # BluePilot: PID lane centering (Phase 2, default OFF)
     self.enable_lane_positioning = False
-    self.LC_PID_controller = PIDController(k_p=0.03, k_i=0.005, rate=20, pos_limit=0.05, neg_limit=-0.05)
+    self.LC_PID_controller = PIDController(k_p=0.03, k_i=0.0, rate=20, pos_limit=0.05, neg_limit=-0.05)
     self.path_angle_last = 0.0
     self.LC_path_angle_reset_counter = 0
 
@@ -256,11 +256,15 @@ class CarController(CarControllerBase):
           path_offset_position = float(np.interp(0.2, ModelConstants.T_IDXS, self.model.position.y))
           path_offset_error = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
 
+          # Deadzone: ignore errors < 0.1m to avoid chasing lane line noise
+          if abs(path_offset_error) < 0.1:
+            path_offset_error = 0.0
+
           # Speed gating: disabled <9 m/s, full >15 m/s
           lc_speed_factor = float(np.interp(CS.out.vEgoRaw, [0.0, 9.0, 15.0], [0.0, 0.0, 1.0]))
           path_offset_error_adj = path_offset_error * lc_speed_factor
 
-          # PID controller → path_angle
+          # P-only controller → path_angle (no integrator to avoid fighting curvature loop)
           apply_path_angle = float(self.LC_PID_controller.update(path_offset_error_adj))
 
           # Rate limit path_angle
