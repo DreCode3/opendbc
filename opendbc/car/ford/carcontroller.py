@@ -117,7 +117,10 @@ class CarController(CarControllerBase):
 
     # BluePilot: Read toggleable params every 1s
     if (self.frame % 100) == 0:
-      self.enable_lane_positioning = self.params.get_bool("enable_lane_positioning")
+      try:
+        self.enable_lane_positioning = self.params.get_bool("enable_lane_positioning")
+      except Exception:
+        self.enable_lane_positioning = False
 
     actuators = CC.actuators
     hud_control = CC.hudControl
