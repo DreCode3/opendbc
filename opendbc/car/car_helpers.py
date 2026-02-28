@@ -164,6 +164,13 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
   CarInterface = interfaces[candidate]
   CP: CarParams = CarInterface.get_params(candidate, fingerprints, car_fw, alpha_long_allowed, is_release, docs=False)
   CP.carVin = vin
+
+  # VIN-based parameter overrides
+  # Explorer ST (VIN position 7 = 'G') has a quicker steering rack than base Explorer
+  if candidate == "FORD_EXPLORER_MK6" and len(vin) >= 7 and vin[6] == 'G':
+    CP.steerRatio = 15.0
+    carlog.info(f'Explorer ST detected via VIN (pos7={vin[6]}), steerRatio={CP.steerRatio}')
+
   CP.carFw = car_fw
   CP.fingerprintSource = source
   CP.fuzzyFingerprint = not exact_match
