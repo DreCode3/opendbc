@@ -110,11 +110,6 @@ class CarController(CarControllerBase):
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
 
-    # BluePilot: Update model data
-    self.sm.update(0)
-    if self.sm.updated['modelV2']:
-      self.model = self.sm['modelV2']
-
     # BluePilot: Read toggleable params every 1s
     if (self.frame % 100) == 0:
       try:
@@ -144,6 +139,11 @@ class CarController(CarControllerBase):
     ### lateral control ###
     # send steer msg at 20Hz
     if (self.frame % CarControllerParams.STEER_STEP) == 0:
+      # BluePilot: Update model data at 20Hz (matches steer step)
+      self.sm.update(0)
+      if self.sm.updated['modelV2']:
+        self.model = self.sm['modelV2']
+
       apply_curvature_rate = 0.0
       apply_path_angle = 0.0
       ramp_type = 0  # Slow (inactive default)
@@ -160,8 +160,9 @@ class CarController(CarControllerBase):
           desired_curvature = actuators.curvature
 
         # BluePilot: Predicted curvature blending (40% predicted, 60% desired)
-        if self.model is not None and len(self.model.orientationRate.z) >= 17:
-          curvatures = np.array(self.model.orientationRate.z) / max(0.01, CS.out.vEgoRaw)
+        # Only blend when moving to avoid noise amplification at standstill (orientationRate.z / ~0 = huge)
+        if CS.out.vEgoRaw > 1.0 and self.model is not None and len(self.model.orientationRate.z) >= 17:
+          curvatures = np.array(self.model.orientationRate.z) / CS.out.vEgoRaw
           predicted_curvature = float(np.interp(self.curvature_lookup_time, ModelConstants.T_IDXS, curvatures))
         else:
           predicted_curvature = desired_curvature
@@ -169,8 +170,9 @@ class CarController(CarControllerBase):
         apply_curvature = (predicted_curvature * self.pc_blend_ratio) + (desired_curvature * (1 - self.pc_blend_ratio))
 
         # BluePilot: Human turn detection (Phase 3)
+        # Only trigger on actual human steering override, NOT at standstill
         human_turn = CS.out.steeringPressed and abs(CS.out.steeringAngleDeg) > 45.0
-        reset_steering = human_turn or (CS.out.vEgoRaw < 0.1)
+        reset_steering = human_turn
 
         if reset_steering:
           apply_curvature = 0.0
