@@ -96,18 +96,19 @@ static bool ford_get_quality_flag_valid(const CANPacket_t *msg) {
 #define FORD_PATH_ANGLE_MIN -0.25f
 #define FORD_PATH_ANGLE_MAX 0.25f
 
-// Curvature rate limits (BluePilot: 3-point interpolation, more permissive at low speed)
+// Curvature rate limits — ceiling for FordCurveMode 2 (most aggressive software mode)
+// Software modes 0/1/2 are all strictly within these safety limits
 #define FORD_LIMITS(limit_lateral_acceleration) {                                               \
   .max_angle = 1000,          /* 0.02 curvature */                                              \
   .angle_deg_to_can = 50000,  /* 1 / (2e-5) rad to can */                                       \
-  .max_angle_error = 200,     /* 0.004 * FORD_STEERING_LIMITS.angle_deg_to_can */               \
+  .max_angle_error = 300,     /* 0.006 * 50000 — ceiling for mode 2 curvature_error */          \
   .angle_rate_up_lookup = {                                                                     \
     {5., 16., 25.},                                                                             \
-    {0.0026, 0.0013, 0.0002}                                                                   \
+    {0.0026, 0.0020, 0.00025}                                                                  \
   },                                                                                            \
   .angle_rate_down_lookup = {                                                                   \
     {5., 16., 25.},                                                                             \
-    {0.0026, 0.0015, 0.0003}                                                                   \
+    {0.0026, 0.0024, 0.00035}                                                                  \
   },                                                                                            \
                                                                                                 \
   /* no blending at low speed due to lack of torque wind-up and inaccurate current curvature */ \

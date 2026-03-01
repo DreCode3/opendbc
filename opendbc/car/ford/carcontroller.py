@@ -38,14 +38,20 @@ def anti_overshoot(apply_curvature, apply_curvature_last, v_ego):
   return float(np.interp(v_ego, [5, 10], [apply_curvature, output_curvature]))
 
 
-def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_curvature, v_ego_raw, steering_angle, lat_active, CP):
+def apply_ford_curvature_limits(apply_curvature, apply_curvature_last, current_curvature, v_ego_raw, steering_angle, lat_active, CP,
+                                curvature_error=None, angle_limits=None):
+  if curvature_error is None:
+    curvature_error = CarControllerParams.CURVATURE_ERROR
+  if angle_limits is None:
+    angle_limits = CarControllerParams.ANGLE_LIMITS
+
   # No blending at low speed due to lack of torque wind-up and inaccurate current curvature
   if v_ego_raw > 9:
-    apply_curvature = np.clip(apply_curvature, current_curvature - CarControllerParams.CURVATURE_ERROR,
-                              current_curvature + CarControllerParams.CURVATURE_ERROR)
+    apply_curvature = np.clip(apply_curvature, current_curvature - curvature_error,
+                              current_curvature + curvature_error)
 
   # Curvature rate limit after driver torque limit
-  apply_curvature = apply_std_steer_angle_limits(apply_curvature, apply_curvature_last, v_ego_raw, steering_angle, lat_active, CarControllerParams.ANGLE_LIMITS)
+  apply_curvature = apply_std_steer_angle_limits(apply_curvature, apply_curvature_last, v_ego_raw, steering_angle, lat_active, angle_limits)
 
   # Ford Q4/CAN FD has more torque available compared to Q3/CAN so we limit it based on lateral acceleration.
   # Safety is not aware of the road roll so we subtract a conservative amount at all times
@@ -88,7 +94,6 @@ class CarController(CarControllerBase):
     self.model = None
 
     # BluePilot: Predicted curvature blending
-    self.curvature_lookup_time = 0.5  # seconds (0.2 was too short for curve anticipation)
     self.pc_blend_ratio = 0.40  # 40% predicted, 60% desired
 
     # BluePilot: Curvature rate computation
@@ -103,6 +108,18 @@ class CarController(CarControllerBase):
     self.reset_steering_last = False
     self.post_reset_ramp_active = False
 
+    # FordCurveMode: runtime-switchable curve aggressiveness (0=current, 1=moderate, 2=aggressive)
+    self.curve_mode = 0
+    self._apply_curve_mode(0)
+
+  def _apply_curve_mode(self, mode):
+    """Apply curve mode preset values."""
+    preset = CarControllerParams.CURVE_MODE_PARAMS.get(mode, CarControllerParams.CURVE_MODE_PARAMS[0])
+    self.curvature_lookup_time = preset['curvature_lookup_time']
+    self.curvature_rate_gain = preset['curvature_rate_gain']
+    self._active_angle_limits = preset['angle_limits']
+    self._active_curvature_error = preset['curvature_error']
+
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
 
@@ -112,6 +129,15 @@ class CarController(CarControllerBase):
         self.enable_lane_positioning = self.params.get_bool("enable_lane_positioning")
       except Exception:
         self.enable_lane_positioning = False
+      try:
+        mode_val = self.params.get("FordCurveMode")
+        new_mode = int(mode_val) if mode_val is not None else 0
+        new_mode = max(0, min(2, new_mode))
+      except Exception:
+        new_mode = 0
+      if new_mode != self.curve_mode:
+        self.curve_mode = new_mode
+        self._apply_curve_mode(new_mode)
 
     actuators = CC.actuators
     hud_control = CC.hudControl
@@ -204,12 +230,14 @@ class CarController(CarControllerBase):
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
 
         self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
-                                                                CS.out.vEgoRaw, 0., CC.latActive, self.CP)
+                                                                CS.out.vEgoRaw, 0., CC.latActive, self.CP,
+                                                                curvature_error=self._active_curvature_error,
+                                                                angle_limits=self._active_angle_limits)
 
         # Post-reset ramp: gradually ramp curvature from 0, keep path_angle=0 for ford.h bypass
         if self.post_reset_ramp_active:
           self.apply_curvature_last = apply_std_steer_angle_limits(apply_curvature, self.apply_curvature_last,
-                                                                   CS.out.vEgoRaw, 0., CC.latActive, CarControllerParams.ANGLE_LIMITS)
+                                                                   CS.out.vEgoRaw, 0., CC.latActive, self._active_angle_limits)
           curvature_error = abs(apply_curvature - self.apply_curvature_last)
           curvature_threshold = max(abs(apply_curvature) * 0.1, 0.001)
           if curvature_error < curvature_threshold:
@@ -230,7 +258,7 @@ class CarController(CarControllerBase):
 
         # Curvature gating: only active for curves > 0.001 1/m (no speed gate)
         curv_factor = float(np.interp(abs(predicted_curvature), [0.0, 0.001, 0.002], [0.0, 0.0, 1.0]))
-        apply_curvature_rate *= curv_factor
+        apply_curvature_rate *= curv_factor * self.curvature_rate_gain
         apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001023, 0.001023))
 
         # BluePilot: Lane change handling
@@ -249,7 +277,9 @@ class CarController(CarControllerBase):
         apply_curvature = actuators.curvature
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
         self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
-                                                                CS.out.vEgoRaw, 0., CC.latActive, self.CP)
+                                                                CS.out.vEgoRaw, 0., CC.latActive, self.CP,
+                                                                curvature_error=self._active_curvature_error,
+                                                                angle_limits=self._active_angle_limits)
         self.curvature_rate_deque.clear()
         self.reset_steering_last = False
         self.post_reset_ramp_active = False

@@ -22,18 +22,47 @@ class CarControllerParams:
 
   STEER_DRIVER_ALLOWANCE = 1.0  # Driver intervention threshold, Nm
 
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    0.02,  # Max curvature for steering command, m^-1
-    # Curvature rate limits
-    # Max curvature is limited by the EPS to an equivalent of ~2.0 m/s^2 at all speeds,
-    #  however max curvature rate linearly decreases as speed increases:
-    #  ~0.009 m^-1/sec at 7 m/s, ~0.002 m^-1/sec at 35 m/s
-    # BluePilot values: more permissive at low speed for parking/tight turns,
-    # 3-point interpolation with 16 m/s midpoint for smoother transition
-    ([5, 16, 25], [0.0025, 0.0012, 0.00015]),
-    ([5, 16, 25], [0.0025, 0.0014, 0.00025])
-  )
-  CURVATURE_ERROR = 0.004  # doubled from 0.002 to allow faster curve entry
+  # --- FordCurveMode presets ---
+  # Mode 0 (Current): baseline from curve-fix v1
+  # Mode 1 (Moderate): relaxed mid-speed rates, longer look-ahead, curvature rate gain
+  # Mode 2 (Aggressive): wider curvature error, most relaxed rates
+  # Safety layer (ford.h) must be >= the most aggressive mode values
+  CURVE_MODE_PARAMS = {
+    0: {
+      'angle_limits': AngleSteeringLimits(
+        0.02,
+        ([5, 16, 25], [0.0025, 0.0012, 0.00015]),
+        ([5, 16, 25], [0.0025, 0.0014, 0.00025]),
+      ),
+      'curvature_error': 0.004,
+      'curvature_lookup_time': 0.5,
+      'curvature_rate_gain': 1.0,
+    },
+    1: {
+      'angle_limits': AngleSteeringLimits(
+        0.02,
+        ([5, 16, 25], [0.0025, 0.0015, 0.00018]),
+        ([5, 16, 25], [0.0025, 0.0018, 0.00028]),
+      ),
+      'curvature_error': 0.004,
+      'curvature_lookup_time': 0.7,
+      'curvature_rate_gain': 1.3,
+    },
+    2: {
+      'angle_limits': AngleSteeringLimits(
+        0.02,
+        ([5, 16, 25], [0.0025, 0.0018, 0.00022]),
+        ([5, 16, 25], [0.0025, 0.0022, 0.00032]),
+      ),
+      'curvature_error': 0.006,
+      'curvature_lookup_time': 0.7,
+      'curvature_rate_gain': 1.5,
+    },
+  }
+
+  # Default values (mode 0) — used when FordCurveMode param is not set
+  ANGLE_LIMITS: AngleSteeringLimits = CURVE_MODE_PARAMS[0]['angle_limits']
+  CURVATURE_ERROR = CURVE_MODE_PARAMS[0]['curvature_error']
 
   ACCEL_MAX = 2.0               # m/s^2 max acceleration
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
