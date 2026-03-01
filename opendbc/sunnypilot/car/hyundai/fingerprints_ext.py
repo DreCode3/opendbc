@@ -37,6 +37,18 @@ FW_VERSIONS_EXT = {
       b'\xf1\x00IK  MFC  MT USA LHD 1.00 1.01 95740-G9000 170920',
     ],
   },
+  # 2024 Genesis G70 (VIN KMTG54SE5RU...) running on IKPE radar platform.
+  CAR.GENESIS_G70_2020: {
+    (Ecu.eps, 0x7d4, None): [
+      b'\xf1\x00IK2 MDPS R 1.00 1.03 57700G9570  4IK4R103',
+    ],
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00IKPE RDR -----      1.00 1.00 99110-G9600         ',
+    ],
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00IK  MFC  AT USA LHD 1.00 1.02 99211-G9500 230712',
+    ],
+  },
   CAR.HYUNDAI_KONA_NON_SCC: {
     # (Ecu.abs, 0x7d1, None): [
     #   b'\xf1\x816V5RAJ00040.ELF\xf1\x00\x00\x00\x00\x00\x00\x00',
