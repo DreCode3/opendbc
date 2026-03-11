@@ -94,7 +94,7 @@ class CarController(CarControllerBase):
     self.model = None
 
     # BluePilot: Predicted curvature blending
-    self.pc_blend_ratio = 0.40  # 40% predicted, 60% desired
+    self.pc_blend_ratio = 0.30  # 30% predicted, 70% desired (reduced from 0.40 to tame EPAS overshoot)
 
     # BluePilot: Curvature rate computation
     self.curvature_rate_delta_t = 0.3  # seconds
@@ -180,7 +180,7 @@ class CarController(CarControllerBase):
         else:
           desired_curvature = actuators.curvature
 
-        # BluePilot: Predicted curvature blending (40% predicted, 60% desired)
+        # BluePilot: Predicted curvature blending (30% predicted, 70% desired)
         # Only blend when moving to avoid noise amplification at standstill (orientationRate.z / ~0 = huge)
         if CS.out.vEgoRaw > 1.0 and self.model is not None and len(self.model.orientationRate.z) >= 17:
           curvatures = np.array(self.model.orientationRate.z) / CS.out.vEgoRaw
@@ -188,7 +188,10 @@ class CarController(CarControllerBase):
         else:
           predicted_curvature = desired_curvature
 
-        apply_curvature = (predicted_curvature * self.pc_blend_ratio) + (desired_curvature * (1 - self.pc_blend_ratio))
+        # Speed-dependent blend: reduce predicted curvature influence at low speed
+        # to reduce planner-sourced hunting in slow traffic (2.5-3s oscillation)
+        blend = float(np.interp(CS.out.vEgoRaw, [7., 15.], [0.10, self.pc_blend_ratio]))
+        apply_curvature = (predicted_curvature * blend) + (desired_curvature * (1 - blend))
 
         # Lane centering: add small curvature offset based on lane position error
         if (self.enable_lane_positioning and self.model is not None
