@@ -37,6 +37,7 @@ class CarControllerParams:
       'curvature_error': 0.004,
       'curvature_lookup_time': 0.5,
       'curvature_rate_gain': 1.0,
+      'smooth_tau': (0.12, 0.04),  # (low_speed, high_speed) EMA time constant in seconds
     },
     1: {
       'angle_limits': AngleSteeringLimits(
@@ -47,6 +48,7 @@ class CarControllerParams:
       'curvature_error': 0.004,
       'curvature_lookup_time': 0.7,
       'curvature_rate_gain': 1.3,
+      'smooth_tau': (0.10, 0.03),  # slightly less smoothing for faster curve entry
     },
     2: {
       'angle_limits': AngleSteeringLimits(
@@ -57,6 +59,7 @@ class CarControllerParams:
       'curvature_error': 0.006,
       'curvature_lookup_time': 0.7,
       'curvature_rate_gain': 1.5,
+      'smooth_tau': (0.08, 0.02),  # minimal smoothing for aggressive response
     },
   }
 

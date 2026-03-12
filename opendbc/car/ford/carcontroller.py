@@ -96,6 +96,10 @@ class CarController(CarControllerBase):
     # BluePilot: Predicted curvature blending
     self.pc_blend_ratio = 0.30  # 30% predicted, 70% desired (reduced from 0.40 to tame EPAS overshoot)
 
+    # Desired curvature smoothing: compensates for upstream modeld lateral smoothing removal (LAT_SMOOTH_SECONDS=0.0)
+    # First-order EMA on the blended curvature to filter planner oscillations that cause hunting
+    self.smooth_curvature_last = 0.0
+
     # BluePilot: Curvature rate computation
     self.curvature_rate_delta_t = 0.3  # seconds
     self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
@@ -119,6 +123,7 @@ class CarController(CarControllerBase):
     self.curvature_rate_gain = preset['curvature_rate_gain']
     self._active_angle_limits = preset['angle_limits']
     self._active_curvature_error = preset['curvature_error']
+    self._smooth_tau = preset.get('smooth_tau', (0.12, 0.04))
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -193,6 +198,14 @@ class CarController(CarControllerBase):
         blend = float(np.interp(CS.out.vEgoRaw, [7., 15.], [0.10, self.pc_blend_ratio]))
         apply_curvature = (predicted_curvature * blend) + (desired_curvature * (1 - blend))
 
+        # Desired curvature smoothing: first-order EMA to filter planner oscillations
+        # Compensates for upstream modeld LAT_SMOOTH_SECONDS=0.0 (smoothing removed)
+        smooth_tau = float(np.interp(CS.out.vEgoRaw, [5., 25.], [self._smooth_tau[0], self._smooth_tau[1]]))
+        smooth_dt = DT_CTRL * CarControllerParams.STEER_STEP  # 0.05s at 20Hz
+        smooth_alpha = 1 - np.exp(-smooth_dt / smooth_tau) if smooth_tau > 0 else 1.0
+        apply_curvature = float(smooth_alpha * apply_curvature + (1 - smooth_alpha) * self.smooth_curvature_last)
+        self.smooth_curvature_last = apply_curvature
+
         # Lane centering: add small curvature offset based on lane position error
         if (self.enable_lane_positioning and self.model is not None
             and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2
@@ -218,6 +231,7 @@ class CarController(CarControllerBase):
 
         if reset_steering:
           apply_curvature = 0.0
+          self.smooth_curvature_last = 0.0
           ramp_type = 3  # Immediate
           self.curvature_rate_deque.clear()
           self.post_reset_ramp_active = False
@@ -286,6 +300,7 @@ class CarController(CarControllerBase):
         self.curvature_rate_deque.clear()
         self.reset_steering_last = False
         self.post_reset_ramp_active = False
+        self.smooth_curvature_last = 0.0
         apply_curvature_rate = 0.0
         ramp_type = 0
 
