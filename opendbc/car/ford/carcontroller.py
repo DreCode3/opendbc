@@ -193,9 +193,9 @@ class CarController(CarControllerBase):
         else:
           predicted_curvature = desired_curvature
 
-        # Speed-dependent blend: reduce predicted curvature influence at low speed
-        # to reduce planner-sourced hunting in slow traffic (2.5-3s oscillation)
-        blend = float(np.interp(CS.out.vEgoRaw, [7., 15.], [0.10, self.pc_blend_ratio]))
+        # Speed-dependent blend: reduce predicted curvature influence at low/mid speed
+        # to reduce planner-sourced hunting (0.3 Hz oscillation worst at 10-13 m/s)
+        blend = float(np.interp(CS.out.vEgoRaw, [7., 22.], [0.10, self.pc_blend_ratio]))
         apply_curvature = (predicted_curvature * blend) + (desired_curvature * (1 - blend))
 
         # Desired curvature smoothing: first-order EMA to filter planner oscillations
