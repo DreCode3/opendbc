@@ -198,12 +198,23 @@ class CarController(CarControllerBase):
         blend = float(np.interp(CS.out.vEgoRaw, [7., 22.], [0.10, self.pc_blend_ratio]))
         apply_curvature = (predicted_curvature * blend) + (desired_curvature * (1 - blend))
 
-        # Desired curvature smoothing: first-order EMA to filter planner oscillations
-        # Compensates for upstream modeld LAT_SMOOTH_SECONDS=0.0 (smoothing removed)
-        smooth_tau = float(np.interp(CS.out.vEgoRaw, [5., 25.], [self._smooth_tau[0], self._smooth_tau[1]]))
+        # Hybrid slow-speed curvature stabilizer:
+        #   < 1.5 m/s: freeze curvature (true standstill, no correction useful)
+        #   1.5-7 m/s: strong EMA (tau=0.55s at 2 m/s, ~0.3 Hz cutoff matches oscillation)
+        #   7-25 m/s:  light EMA (tau from mode preset, cutoff ~1-4 Hz)
         smooth_dt = DT_CTRL * CarControllerParams.STEER_STEP  # 0.05s at 20Hz
-        smooth_alpha = 1 - np.exp(-smooth_dt / smooth_tau) if smooth_tau > 0 else 1.0
-        apply_curvature = float(smooth_alpha * apply_curvature + (1 - smooth_alpha) * self.smooth_curvature_last)
+        if CS.out.vEgoRaw < 1.5:
+          # Freeze: hold last value, no update
+          apply_curvature = self.smooth_curvature_last
+        else:
+          # Speed-dependent tau: strong at stop-and-go, light at highway
+          # 2 m/s → tau=0.55s (~0.29 Hz cutoff), 7 m/s → mode tau_lo, 25 m/s → mode tau_hi
+          if CS.out.vEgoRaw < 7.0:
+            smooth_tau = float(np.interp(CS.out.vEgoRaw, [1.5, 7.0], [0.55, self._smooth_tau[0]]))
+          else:
+            smooth_tau = float(np.interp(CS.out.vEgoRaw, [7.0, 25.0], [self._smooth_tau[0], self._smooth_tau[1]]))
+          smooth_alpha = 1.0 - np.exp(-smooth_dt / smooth_tau)
+          apply_curvature = float(smooth_alpha * apply_curvature + (1.0 - smooth_alpha) * self.smooth_curvature_last)
         self.smooth_curvature_last = apply_curvature
 
         # Lane centering: add small curvature offset based on lane position error
