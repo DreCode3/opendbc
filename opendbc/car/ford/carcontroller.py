@@ -204,10 +204,10 @@ class CarController(CarControllerBase):
         #   >7 m/s:   EMA only (mode preset tau), no deadband
         smooth_dt = DT_CTRL * CarControllerParams.STEER_STEP  # 0.05s at 20Hz
 
-        # Speed-dependent deadband threshold (1/m): 0.003 at standstill, 0.0 at 7 m/s
-        # At 1-3 mph planner oscillation amplitude is ~0.013-0.022, so 0.003 blocks most noise
-        # while passing real lane corrections (typically >0.005 sustained)
-        deadband = float(np.interp(CS.out.vEgoRaw, [0., 4., 7.], [0.003, 0.003, 0.0]))
+        # Speed-dependent deadband threshold (1/m): 0.001 at standstill, 0.0 at 7 m/s
+        # Planner noise at 1-3 mph is ~0.013-0.022 amplitude; 0.001 blocks small oscillations
+        # while passing gentle curves (0.001-0.002) and real lane corrections
+        deadband = float(np.interp(CS.out.vEgoRaw, [0., 4., 7.], [0.001, 0.001, 0.0]))
         if abs(apply_curvature - self.smooth_curvature_last) <= deadband:
           apply_curvature = self.smooth_curvature_last  # hold: change too small to act on
         # EMA above 4 m/s (no EMA below — deadband already holds)
