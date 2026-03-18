@@ -103,8 +103,8 @@ class CarController(CarControllerBase):
     self.curvature_rate_delta_t = 0.3  # seconds
     self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
 
-    # Lane centering via curvature offset (Phase 2, default OFF)
-    self.enable_lane_positioning = False
+    # Lane centering via curvature offset (Phase 2, default ON)
+    self.enable_lane_positioning = True
     self.centering_gain = 0.0003  # curvature offset per meter of lane offset
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
@@ -218,9 +218,10 @@ class CarController(CarControllerBase):
         self.smooth_curvature_last = apply_curvature
 
         # Lane centering: add small curvature offset based on lane position error
+        # Gate lowered from 15.0 to 7.0 m/s to cover 15-34 mph where +0.10-0.19m left-of-center bias exists
         if (self.enable_lane_positioning and self.model is not None
             and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2
-            and CS.out.vEgoRaw > 15.0):
+            and CS.out.vEgoRaw > 7.0):
           left_y = self.model.laneLines[1].y[0]
           right_y = self.model.laneLines[2].y[0]
           left_prob = self.model.laneLineProbs[1]
