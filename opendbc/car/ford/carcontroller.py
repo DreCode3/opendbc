@@ -236,27 +236,45 @@ class CarController(CarControllerBase):
             lane_offset = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
             apply_curvature += lane_offset * self.centering_gain
 
-        # BluePilot: Human turn detection (Phase 3)
-        # Only trigger on actual human steering override, NOT at standstill
+        # Measured curvature: used for driver override tracking and rate limiting
+        current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
+
+        # BluePilot: Driver override handling (Ford-specific)
+        # Ford EPAS tracks commanded curvature directly. If we keep commanding our desired
+        # curvature while the driver steers, the servo actively fights their input.
+        # Fix: when steeringPressed, command measured curvature so EPAS is cooperative
+        # (holds actual state) instead of fighting toward the model's target.
+        #
+        # Hard reset (>45°): immediate snap to measured, clear all ramp state
+        # Gentle override (<45°): blend toward measured, EMA re-engages smoothly on release
         human_turn = CS.out.steeringPressed and abs(CS.out.steeringAngleDeg) > 45.0
         reset_steering = human_turn
 
         if reset_steering:
-          apply_curvature = 0.0
-          self.smooth_curvature_last = 0.0
+          # Hard reset: snap to measured curvature, not zero (zero causes jerk mid-curve)
+          apply_curvature = current_curvature
+          self.smooth_curvature_last = current_curvature
           ramp_type = 3  # Immediate
           self.curvature_rate_deque.clear()
           self.post_reset_ramp_active = False
+        elif CS.out.steeringPressed:
+          # Gentle override: blend toward measured so EPAS stops fighting driver.
+          # alpha=0.6 at 20Hz (0.05s/step) ≈ 2-3 cycles to fully track measured.
+          # smooth_curvature_last updated here so EMA re-engages from actual position.
+          override_alpha = 0.6
+          apply_curvature = (override_alpha * current_curvature +
+                             (1.0 - override_alpha) * self.smooth_curvature_last)
+          self.smooth_curvature_last = apply_curvature
+          self.curvature_rate_deque.clear()
         else:
-          # Detect transition out of reset — start post-reset ramp
+          # Normal: detect transition out of hard reset — start post-reset ramp
           if self.reset_steering_last and not reset_steering:
             self.post_reset_ramp_active = True
-            self.apply_curvature_last = 0.0
+            self.apply_curvature_last = current_curvature  # ramp from actual, not zero
 
         self.reset_steering_last = reset_steering
 
         # apply rate limits, curvature error limit, and clip to signal range
-        current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
 
         self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
                                                                 CS.out.vEgoRaw, 0., CC.latActive, self.CP,
@@ -273,7 +291,7 @@ class CarController(CarControllerBase):
             self.post_reset_ramp_active = False
 
         if reset_steering:
-          self.apply_curvature_last = 0.0
+          self.apply_curvature_last = current_curvature
 
         # BluePilot: Curvature rate from derivative of predicted curvature
         if not reset_steering:
