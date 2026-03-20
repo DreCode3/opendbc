@@ -238,16 +238,22 @@ class CarController(CarControllerBase):
             laneline_scale = float(np.interp(laneline_confidence, [0.6, 0.8], [0.0, 1.0]))
             path_offset_lanelines = (left_y + right_y) / 2
             path_offset_position = float(np.interp(0.2, ModelConstants.T_IDXS, self.model.position.y))
+            # SIGN VERIFICATION NEEDED: lane_width formula (right_y + (-left_y)) requires right_y > left_y,
+            # implying lane line y uses positive-right convention. model.position.y uses OpenPilot's
+            # standard positive-left convention. These may have opposite signs for the same offset.
+            # Verify from drive logs: when car is visually left of center, are lane_offset > 0
+            # and apply_curvature correction positive (= right turn)? If not, negate lane_offset.
             lane_offset = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
-            # Accumulate integral only on straight/gentle sections when driver is not touching wheel.
-            # Curve gate prevents false buildup from lane line geometry shift during turns.
+            # Apply P+I correction only on straight/gentle sections when driver is not touching wheel.
+            # Curve gate prevents both false integral buildup AND spurious P-term reaction to
+            # lane line geometry that shifts during turns (lane lines are not centered in a curve).
             if abs(apply_curvature) < 0.003 and not CS.out.steeringPressed:
               lc_integral_step = lane_offset * smooth_dt
               self.lane_centering_integral += lc_integral_step
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
+              apply_curvature += self.lc_kp * lane_offset + self.lc_ki * self.lane_centering_integral
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
-            apply_curvature += self.lc_kp * lane_offset + self.lc_ki * self.lane_centering_integral
           else:
             self.lane_centering_integral *= 0.98  # decay when lane lines not confident enough
         else:
