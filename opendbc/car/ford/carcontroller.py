@@ -101,7 +101,7 @@ class CarController(CarControllerBase):
 
     # BluePilot: Curvature rate computation
     self.curvature_rate_delta_t = 0.3  # seconds
-    self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
+    self.curvature_rate_deque = deque(maxlen=7)  # 0.3s at 20Hz: 7 samples = 6 intervals × 0.05s = 0.30s
 
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
@@ -165,6 +165,9 @@ class CarController(CarControllerBase):
       can_sends.append(fordcan.create_button_msg(self.packer, self.CAN.camera, CS.buttons_stock_values, tja_toggle=True))
 
     ### lateral control ###
+    # Pre-initialize apply_curv_send so it is defined on non-steer frames (frame % STEER_STEP != 0).
+    # The steer block runs at 20Hz; on the other 4/5 frames new_actuators.curvature still needs a value.
+    apply_curv_send = self.apply_curvature_last
     # send steer msg at 20Hz
     if (self.frame % CarControllerParams.STEER_STEP) == 0:
       # BluePilot: Update model data at 20Hz (matches steer step)
@@ -188,7 +191,7 @@ class CarController(CarControllerBase):
 
         # BluePilot: Predicted curvature blending (30% predicted, 70% desired)
         # Only blend when moving to avoid noise amplification at standstill (orientationRate.z / ~0 = huge)
-        if CS.out.vEgoRaw > 1.0 and self.model is not None and len(self.model.orientationRate.z) >= 17:
+        if CS.out.vEgoRaw > 1.0 and self.model is not None and len(self.model.orientationRate.z) >= len(ModelConstants.T_IDXS):
           curvatures = np.array(self.model.orientationRate.z) / CS.out.vEgoRaw
           predicted_curvature = float(np.interp(self.curvature_lookup_time, ModelConstants.T_IDXS, curvatures))
         else:
