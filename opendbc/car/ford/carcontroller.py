@@ -106,6 +106,8 @@ class CarController(CarControllerBase):
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
     self.lane_centering_integral = 0.0  # PI integral accumulator (m·s)
+    self.lc_kp = 0.0015  # curvature per meter of lane offset (P term)
+    self.lc_ki = 0.0003  # curvature per meter·second of accumulated offset (I term)
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
     self.reset_steering_last = False
@@ -243,9 +245,7 @@ class CarController(CarControllerBase):
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
-            lc_kp = 0.0015  # curvature per meter of lane offset (P term)
-            lc_ki = 0.0003  # curvature per meter·second of accumulated offset (I term)
-            apply_curvature += lc_kp * lane_offset + lc_ki * self.lane_centering_integral
+            apply_curvature += self.lc_kp * lane_offset + self.lc_ki * self.lane_centering_integral
           else:
             self.lane_centering_integral *= 0.98  # decay when lane lines not confident enough
         else:
