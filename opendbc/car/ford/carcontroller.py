@@ -338,11 +338,15 @@ class CarController(CarControllerBase):
         # Feed-forward EPAS bias correction: EPAS consistently over-delivers by ~0.000420-0.000500 m⁻¹
         # across all operating conditions. Confirmed static gain (flat across dC/dt rate bins in
         # curve dynamics analysis — bias variation only 0.000082 across rate bins).
-        # Subtract a proportional offset before commanding to reduce +82-104% over-delivery.
-        # Not applied during override reset (apply_curvature_last holds measured curvature = truth).
+        # IMPORTANT: Applied to apply_curv_send only — do NOT modify self.apply_curvature_last,
+        # which is the rate limiter's state baseline. Modifying it would corrupt rate limiting
+        # next frame (it would start from an artificially low baseline, allowing double the rate).
+        # Sign-flip guard: skip correction when |cmd| <= ff_bias to avoid steering reversal.
+        apply_curv_send = self.apply_curvature_last
         if not reset_steering:
-          ff_bias = float(np.interp(abs(self.apply_curvature_last), [0.0, 0.003], [0.000420, 0.000500]))
-          self.apply_curvature_last -= ff_bias * np.sign(self.apply_curvature_last)
+          ff_bias = float(np.interp(abs(apply_curv_send), [0.0, 0.003], [0.000420, 0.000500]))
+          if abs(apply_curv_send) > ff_bias:  # prevent sign flip near zero
+            apply_curv_send -= ff_bias * np.sign(apply_curv_send)
 
       else:
         # Not latActive — zero everything
@@ -359,17 +363,18 @@ class CarController(CarControllerBase):
         self.lane_centering_integral = 0.0  # clear on full disengage
         apply_curvature_rate = 0.0
         ramp_type = 0
+        apply_curv_send = self.apply_curvature_last
 
       # Send CAN message: path_offset=0, path_angle=0, curvature+rate NEGATED
       if self.CP.flags & FordFlags.CANFD:
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
         can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode,
-                         0., 0., -self.apply_curvature_last, -apply_curvature_rate, counter,
+                         0., 0., -apply_curv_send, -apply_curvature_rate, counter,
                          ramp_type=ramp_type, precision_type=1))
       else:
         can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive,
-                         0., 0., -self.apply_curvature_last, -apply_curvature_rate,
+                         0., 0., -apply_curv_send, -apply_curvature_rate,
                          ramp_type=ramp_type, precision_type=1))
 
     # send lka msg at 33Hz
@@ -440,7 +445,7 @@ class CarController(CarControllerBase):
     self.lead_distance_bars_last = hud_control.leadDistanceBars
 
     new_actuators = actuators.as_builder()
-    new_actuators.curvature = self.apply_curvature_last
+    new_actuators.curvature = apply_curv_send  # report FF-corrected value actually sent to EPAS
     new_actuators.accel = self.accel
     new_actuators.gas = self.gas
 
