@@ -103,9 +103,9 @@ class CarController(CarControllerBase):
     self.curvature_rate_delta_t = 0.3  # seconds
     self.curvature_rate_deque = deque(maxlen=6)  # 0.3s at 20Hz
 
-    # Lane centering via curvature offset (Phase 2, default ON)
+    # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
-    self.centering_gain = 0.0003  # curvature offset per meter of lane offset
+    self.lane_centering_integral = 0.0  # PI integral accumulator (m·s)
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
     self.reset_steering_last = False
@@ -217,8 +217,10 @@ class CarController(CarControllerBase):
           apply_curvature = float(smooth_alpha * apply_curvature + (1.0 - smooth_alpha) * self.smooth_curvature_last)
         self.smooth_curvature_last = apply_curvature
 
-        # Lane centering: add small curvature offset based on lane position error
-        # Gate lowered from 15.0 to 7.0 m/s to cover 15-34 mph where +0.10-0.19m left-of-center bias exists
+        # Lane centering: PI controller on lateral position error
+        # P term reacts immediately to current offset; I term cancels persistent structural bias.
+        # Integral gates: good lane confidence, low curvature (not in a turn where lane line
+        # geometry shifts create false offset), and driver not overriding.
         if (self.enable_lane_positioning and self.model is not None
             and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2
             and CS.out.vEgoRaw > 7.0):
@@ -234,7 +236,20 @@ class CarController(CarControllerBase):
             path_offset_lanelines = (left_y + right_y) / 2
             path_offset_position = float(np.interp(0.2, ModelConstants.T_IDXS, self.model.position.y))
             lane_offset = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
-            apply_curvature += lane_offset * self.centering_gain
+            # Accumulate integral only on straight/gentle sections when driver is not touching wheel.
+            # Curve gate prevents false buildup from lane line geometry shift during turns.
+            if abs(apply_curvature) < 0.003 and not CS.out.steeringPressed:
+              self.lane_centering_integral += lane_offset * smooth_dt
+              self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
+            else:
+              self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
+            lc_kp = 0.0015  # curvature per meter of lane offset (P term)
+            lc_ki = 0.0003  # curvature per meter·second of accumulated offset (I term)
+            apply_curvature += lc_kp * lane_offset + lc_ki * self.lane_centering_integral
+          else:
+            self.lane_centering_integral *= 0.98  # decay when lane lines not confident enough
+        else:
+          self.lane_centering_integral *= 0.98  # decay below speed gate or no model
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
@@ -257,6 +272,7 @@ class CarController(CarControllerBase):
           ramp_type = 3  # Immediate
           self.curvature_rate_deque.clear()
           self.post_reset_ramp_active = False
+          self.lane_centering_integral = 0.0  # clear integral to prevent snap on re-engage
         elif CS.out.steeringPressed:
           # Gentle override: blend toward measured so EPAS stops fighting driver.
           # alpha=0.6 at 20Hz (0.05s/step) ≈ 2-3 cycles to fully track measured.
@@ -319,6 +335,15 @@ class CarController(CarControllerBase):
             self.apply_curvature_last *= factor
           apply_curvature_rate = 0.0
 
+        # Feed-forward EPAS bias correction: EPAS consistently over-delivers by ~0.000420-0.000500 m⁻¹
+        # across all operating conditions. Confirmed static gain (flat across dC/dt rate bins in
+        # curve dynamics analysis — bias variation only 0.000082 across rate bins).
+        # Subtract a proportional offset before commanding to reduce +82-104% over-delivery.
+        # Not applied during override reset (apply_curvature_last holds measured curvature = truth).
+        if not reset_steering:
+          ff_bias = float(np.interp(abs(self.apply_curvature_last), [0.0, 0.003], [0.000420, 0.000500]))
+          self.apply_curvature_last -= ff_bias * np.sign(self.apply_curvature_last)
+
       else:
         # Not latActive — zero everything
         apply_curvature = actuators.curvature
@@ -331,6 +356,7 @@ class CarController(CarControllerBase):
         self.reset_steering_last = False
         self.post_reset_ramp_active = False
         self.smooth_curvature_last = 0.0
+        self.lane_centering_integral = 0.0  # clear on full disengage
         apply_curvature_rate = 0.0
         ramp_type = 0
 

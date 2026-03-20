@@ -35,7 +35,7 @@ class CarControllerParams:
         ([5, 16, 25], [0.0025, 0.0014, 0.00025]),
       ),
       'curvature_error': 0.004,
-      'curvature_lookup_time': 0.5,
+      'curvature_lookup_time': 0.3,  # reduced from 0.5: EPAS has ~600ms peak lag, 0.5s caused exit overshoot
       'curvature_rate_gain': 1.0,
       'smooth_tau': (0.12, 0.04),  # (low_speed, high_speed) EMA time constant in seconds
     },
@@ -179,7 +179,7 @@ class CAR(Platforms):
       FordCarDocs("Ford Explorer 2020-24", hybrid=True),  # Hybrid: Limited and Platinum only
       FordCarDocs("Lincoln Aviator 2020-24", "Co-Pilot360 Plus", plug_in_hybrid=True),  # Hybrid: Grand Touring only
     ],
-    CarSpecs(mass=2050, wheelbase=3.025, steerRatio=16.8),
+    CarSpecs(mass=2050, wheelbase=3.025, steerRatio=17.2),  # measured median 17.23 at 45-65mph (was 16.8)
   )
   FORD_EXPEDITION_MK4 = FordCANFDPlatformConfig(
     [FordCarDocs("Ford Expedition 2022-24", "Co-Pilot360 Assist 2.0", hybrid=False)],
