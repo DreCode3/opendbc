@@ -334,25 +334,26 @@ class CarController(CarControllerBase):
         apply_curvature_rate *= curv_factor * self.curvature_rate_gain
         apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001023, 0.001023))
 
-        # BluePilot: Lane change handling
+        # apply_curv_send is the value actually sent to EPAS. All post-rate-limit transformations
+        # (lane change factor, FF bias) are applied here only — self.apply_curvature_last must
+        # remain unmodified after rate limiting to preserve the rate limiter's state baseline.
+        apply_curv_send = self.apply_curvature_last
+
+        # BluePilot: Lane change handling — scale apply_curv_send only, not the rate limiter state
         lane_change = self.model is not None and self.model.meta.laneChangeState in (
           LaneChangeState.preLaneChange, LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing)
         if lane_change:
           factor = float(np.interp(CS.out.vEgoRaw, [4.4, 40.23], [0.95, 0.85]))
-          if self.model.meta.laneChangeDirection == LaneChangeDirection.left and self.apply_curvature_last < 0:
-            self.apply_curvature_last *= factor
-          elif self.model.meta.laneChangeDirection == LaneChangeDirection.right and self.apply_curvature_last > 0:
-            self.apply_curvature_last *= factor
+          if self.model.meta.laneChangeDirection == LaneChangeDirection.left and apply_curv_send < 0:
+            apply_curv_send *= factor
+          elif self.model.meta.laneChangeDirection == LaneChangeDirection.right and apply_curv_send > 0:
+            apply_curv_send *= factor
           apply_curvature_rate = 0.0
 
         # Feed-forward EPAS bias correction: EPAS consistently over-delivers by ~0.000420-0.000500 m⁻¹
         # across all operating conditions. Confirmed static gain (flat across dC/dt rate bins in
         # curve dynamics analysis — bias variation only 0.000082 across rate bins).
-        # IMPORTANT: Applied to apply_curv_send only — do NOT modify self.apply_curvature_last,
-        # which is the rate limiter's state baseline. Modifying it would corrupt rate limiting
-        # next frame (it would start from an artificially low baseline, allowing double the rate).
         # Sign-flip guard: skip correction when |cmd| <= ff_bias to avoid steering reversal.
-        apply_curv_send = self.apply_curvature_last
         if not reset_steering:
           ff_bias = float(np.interp(abs(apply_curv_send), [0.0, 0.003], [0.000420, 0.000500]))
           if abs(apply_curv_send) > ff_bias:  # prevent sign flip near zero
