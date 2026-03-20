@@ -223,6 +223,7 @@ class CarController(CarControllerBase):
         # P term reacts immediately to current offset; I term cancels persistent structural bias.
         # Integral gates: good lane confidence, low curvature (not in a turn where lane line
         # geometry shifts create false offset), and driver not overriding.
+        lc_integral_step = 0.0  # tracks integral increment this frame for anti-windup
         if (self.enable_lane_positioning and self.model is not None
             and len(self.model.laneLines) > 2 and len(self.model.laneLineProbs) > 2
             and CS.out.vEgoRaw > 7.0):
@@ -241,7 +242,8 @@ class CarController(CarControllerBase):
             # Accumulate integral only on straight/gentle sections when driver is not touching wheel.
             # Curve gate prevents false buildup from lane line geometry shift during turns.
             if abs(apply_curvature) < 0.003 and not CS.out.steeringPressed:
-              self.lane_centering_integral += lane_offset * smooth_dt
+              lc_integral_step = lane_offset * smooth_dt
+              self.lane_centering_integral += lc_integral_step
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
@@ -291,11 +293,19 @@ class CarController(CarControllerBase):
         self.reset_steering_last = reset_steering
 
         # apply rate limits, curvature error limit, and clip to signal range
-
+        apply_curvature_pre_rl = apply_curvature  # save before rate limiting for anti-windup
         self.apply_curvature_last = apply_ford_curvature_limits(apply_curvature, self.apply_curvature_last, current_curvature,
                                                                 CS.out.vEgoRaw, 0., CC.latActive, self.CP,
                                                                 curvature_error=self._active_curvature_error,
                                                                 angle_limits=self._active_angle_limits)
+
+        # Anti-windup: if the rate limiter clipped in the same direction the integral was pushing,
+        # undo this frame's integral step so the integral doesn't accumulate beyond what the EPAS received.
+        if lc_integral_step != 0.0:
+          rl_clip = apply_curvature_pre_rl - self.apply_curvature_last
+          if rl_clip * lc_integral_step > 0:  # clip and integral step in same direction
+            self.lane_centering_integral -= lc_integral_step
+            self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
 
         # Post-reset ramp: gradually ramp curvature from 0, keep path_angle=0 for ford.h bypass
         if self.post_reset_ramp_active:
