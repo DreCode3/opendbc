@@ -465,7 +465,7 @@ class CarController(CarControllerBase):
     self.lead_distance_bars_last = hud_control.leadDistanceBars
 
     new_actuators = actuators.as_builder()
-    new_actuators.curvature = apply_curv_send  # report FF-corrected value actually sent to EPAS
+    new_actuators.curvature = float(apply_curv_send)  # cast: capnp rejects numpy.float64
     new_actuators.accel = self.accel
     new_actuators.gas = self.gas
 
