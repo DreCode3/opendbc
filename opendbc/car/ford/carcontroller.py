@@ -247,16 +247,18 @@ class CarController(CarControllerBase):
             # Verify from drive logs: when car is visually left of center, are lane_offset > 0
             # and apply_curvature correction positive (= right turn)? If not, negate lane_offset.
             lane_offset = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
-            # Apply P+I correction only on straight/gentle sections when driver is not touching wheel.
-            # Curve gate prevents both false integral buildup AND spurious P-term reaction to
-            # lane line geometry that shifts during turns (lane lines are not centered in a curve).
+            # Integral gate: only accumulate on straights when driver is not overriding.
+            # Curve gate prevents false integral buildup from lane line geometry shift during turns.
+            # P+I CORRECTION is applied unconditionally (whenever lane confidence is good) —
+            # the P-term is needed in gentle curves to maintain centering, and the I-term
+            # represents structural bias (road crown) that persists through curves.
             if abs(apply_curvature) < 0.003 and not CS.out.steeringPressed:
               lc_integral_step = lane_offset * smooth_dt
               self.lane_centering_integral += lc_integral_step
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
-              apply_curvature += self.lc_kp * lane_offset + self.lc_ki * self.lane_centering_integral
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
+            apply_curvature += self.lc_kp * lane_offset + self.lc_ki * self.lane_centering_integral
           else:
             self.lane_centering_integral *= 0.98  # decay when lane lines not confident enough
         else:
@@ -359,14 +361,14 @@ class CarController(CarControllerBase):
             apply_curv_send *= factor
           apply_curvature_rate = 0.0
 
-        # Feed-forward EPAS bias correction: EPAS consistently over-delivers by ~0.000420-0.000500 m⁻¹
-        # across all operating conditions. Confirmed static gain (flat across dC/dt rate bins in
-        # curve dynamics analysis — bias variation only 0.000082 across rate bins).
-        # Sign-flip guard: skip correction when |cmd| <= ff_bias to avoid steering reversal.
-        if not reset_steering:
-          ff_bias = float(np.interp(abs(apply_curv_send), [0.0, 0.003], [0.000420, 0.000500]))
-          if abs(apply_curv_send) > ff_bias:  # prevent sign flip near zero
-            apply_curv_send -= ff_bias * np.sign(apply_curv_send)
+        # Feed-forward EPAS bias correction: DISABLED for now.
+        # The sign-flip guard prevents correction when |cmd| < ff_bias (~0.000420), which covers
+        # nearly the entire centering range. This means FF does nothing for small corrections
+        # and actively harms centering. Re-enable after recalibrating with drive data.
+        # if not reset_steering:
+        #   ff_bias = float(np.interp(abs(apply_curv_send), [0.0, 0.003], [0.000420, 0.000500]))
+        #   if abs(apply_curv_send) > ff_bias:  # prevent sign flip near zero
+        #     apply_curv_send -= ff_bias * np.sign(apply_curv_send)
 
       else:
         # Not latActive — zero everything
