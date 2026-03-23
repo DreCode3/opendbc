@@ -107,8 +107,8 @@ class CarController(CarControllerBase):
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
     self.lane_centering_integral = 0.0  # PI integral accumulator (m·s)
-    self.lc_kp = 0.0005  # curvature per meter of lane offset (P term) — reduced for continuous operation
-    self.lc_ki = 0.0001  # curvature per meter·second of accumulated offset (I term) — reduced for continuous operation
+    self.lc_kp = 0.0002  # curvature per meter of lane offset (P term) — low to avoid jitter from lane line noise
+    self.lc_ki = 0.0002  # curvature per meter·second of accumulated offset (I term) — handles persistent drift smoothly
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
     self.reset_steering_last = False
