@@ -268,7 +268,12 @@ class CarController(CarControllerBase):
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
-            pi_p = self.lc_kp * lane_offset
+            # Deadband: don't apply P-term for offsets < 0.08m to filter lane line noise.
+            # I-term still accumulates (above) so persistent small offsets are eventually corrected.
+            if abs(lane_offset) > 0.08:
+              pi_p = self.lc_kp * lane_offset
+            else:
+              pi_p = 0.0
             pi_i = self.lc_ki * self.lane_centering_integral
             apply_curvature += pi_p + pi_i
             # 1Hz debug log: PI controller internals for drive analysis
