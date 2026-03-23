@@ -264,7 +264,7 @@ class CarController(CarControllerBase):
             apply_curvature += pi_p + pi_i
             # 1Hz debug log: PI controller internals for drive analysis
             if self.frame % 100 == 0:
-              carlog.debug("LC: off=%.3f ll=%.3f pos=%.4f scl=%.2f conf=%.2f wid=%.2f int=%.4f P=%.6f I=%.6f curv=%.6f spd=%.1f" % (
+              carlog.info("LC: off=%.3f ll=%.3f pos=%.4f scl=%.2f conf=%.2f wid=%.2f int=%.4f P=%.6f I=%.6f curv=%.6f spd=%.1f" % (
                 lane_offset, path_offset_lanelines, path_offset_position, laneline_scale, laneline_confidence,
                 lane_width, self.lane_centering_integral, pi_p, pi_i, apply_curvature, CS.out.vEgoRaw))
           else:
@@ -373,7 +373,7 @@ class CarController(CarControllerBase):
         if self.frame % 100 == 0:
           rl_clipped = abs(apply_curvature_pre_rl - self.apply_curvature_last) > 1e-6
           aw_fired = lc_integral_step != 0.0 and rl_clipped and (apply_curvature_pre_rl - self.apply_curvature_last) * lc_integral_step > 0
-          carlog.debug("CP: des=%.6f pred=%.6f ema=%.6f preRL=%.6f RL=%.6f send=%.6f meas=%.6f | ovr=%d rst=%d ramp=%d rlClip=%d aw=%d | ang=%.1f tq=%.2f" % (
+          carlog.info("CP: des=%.6f pred=%.6f ema=%.6f preRL=%.6f RL=%.6f send=%.6f meas=%.6f | ovr=%d rst=%d ramp=%d rlClip=%d aw=%d | ang=%.1f tq=%.2f" % (
             desired_curvature, predicted_curvature, self.smooth_curvature_last,
             apply_curvature_pre_rl, self.apply_curvature_last, apply_curv_send, current_curvature,
             CS.out.steeringPressed, reset_steering, self.post_reset_ramp_active, rl_clipped, aw_fired,
