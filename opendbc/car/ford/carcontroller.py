@@ -369,6 +369,16 @@ class CarController(CarControllerBase):
             apply_curv_send *= factor
           apply_curvature_rate = 0.0
 
+        # 1Hz debug log: curvature pipeline stages, override state, anti-windup
+        if self.frame % 100 == 0:
+          rl_clipped = abs(apply_curvature_pre_rl - self.apply_curvature_last) > 1e-6
+          aw_fired = lc_integral_step != 0.0 and rl_clipped and (apply_curvature_pre_rl - self.apply_curvature_last) * lc_integral_step > 0
+          carlog.debug("CP: des=%.6f pred=%.6f ema=%.6f preRL=%.6f RL=%.6f send=%.6f meas=%.6f | ovr=%d rst=%d ramp=%d rlClip=%d aw=%d | ang=%.1f tq=%.2f" % (
+            desired_curvature, predicted_curvature, self.smooth_curvature_last,
+            apply_curvature_pre_rl, self.apply_curvature_last, apply_curv_send, current_curvature,
+            CS.out.steeringPressed, reset_steering, self.post_reset_ramp_active, rl_clipped, aw_fired,
+            CS.out.steeringAngleDeg, CS.out.steeringTorque))
+
         # Feed-forward EPAS bias correction: DISABLED for now.
         # The sign-flip guard prevents correction when |cmd| < ff_bias (~0.000420), which covers
         # nearly the entire centering range. This means FF does nothing for small corrections
