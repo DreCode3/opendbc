@@ -4,6 +4,7 @@ from collections import deque
 from cereal import log, messaging
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs
+from opendbc.car.carlog import carlog
 from opendbc.car.lateral import ISO_LATERAL_ACCEL, apply_std_steer_angle_limits
 from opendbc.car.ford import fordcan
 from opendbc.car.ford.values import CarControllerParams, FordFlags, CAR
@@ -258,7 +259,14 @@ class CarController(CarControllerBase):
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
-            apply_curvature += self.lc_kp * lane_offset + self.lc_ki * self.lane_centering_integral
+            pi_p = self.lc_kp * lane_offset
+            pi_i = self.lc_ki * self.lane_centering_integral
+            apply_curvature += pi_p + pi_i
+            # 1Hz debug log: PI controller internals for drive analysis
+            if self.frame % 100 == 0:
+              carlog.debug("LC: off=%.3f ll=%.3f pos=%.4f scl=%.2f conf=%.2f wid=%.2f int=%.4f P=%.6f I=%.6f curv=%.6f spd=%.1f" % (
+                lane_offset, path_offset_lanelines, path_offset_position, laneline_scale, laneline_confidence,
+                lane_width, self.lane_centering_integral, pi_p, pi_i, apply_curvature, CS.out.vEgoRaw))
           else:
             self.lane_centering_integral *= 0.98  # decay when lane lines not confident enough
         else:
