@@ -107,7 +107,8 @@ class CarController(CarControllerBase):
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
     self.lane_centering_integral = 0.0  # PI integral accumulator (m·s)
-    self.lc_kp = 0.0002  # curvature per meter of lane offset (P term) — low to avoid jitter from lane line noise
+    self.lane_offset_ema = 0.0  # EMA-smoothed lane offset to filter lane line noise
+    self.lc_kp = 0.0001  # curvature per meter of lane offset (P term) — very low, I-term does the work
     self.lc_ki = 0.0002  # curvature per meter·second of accumulated offset (I term) — handles persistent drift smoothly
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
@@ -256,7 +257,12 @@ class CarController(CarControllerBase):
             # standard positive-left convention. These may have opposite signs for the same offset.
             # Verify from drive logs: when car is visually left of center, are lane_offset > 0
             # and apply_curvature correction positive (= right turn)? If not, negate lane_offset.
-            lane_offset = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
+            lane_offset_raw = path_offset_position * (1 - laneline_scale) + path_offset_lanelines * laneline_scale
+            # EMA-smooth the lane offset to filter lane line detector noise (~0.08m frame-to-frame jitter).
+            # tau=1.5s removes high-frequency noise while preserving real drift signals.
+            lc_ema_alpha = 1.0 - np.exp(-smooth_dt / 1.5)
+            self.lane_offset_ema = float(lc_ema_alpha * lane_offset_raw + (1.0 - lc_ema_alpha) * self.lane_offset_ema)
+            lane_offset = self.lane_offset_ema
             # Integral gate: only accumulate on straights when driver is not overriding.
             # Curve gate prevents false integral buildup from lane line geometry shift during turns.
             # P+I CORRECTION is applied unconditionally (whenever lane confidence is good) —
@@ -268,12 +274,7 @@ class CarController(CarControllerBase):
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -1.0, 1.0))
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
-            # Deadband: don't apply P-term for offsets < 0.08m to filter lane line noise.
-            # I-term still accumulates (above) so persistent small offsets are eventually corrected.
-            if abs(lane_offset) > 0.08:
-              pi_p = self.lc_kp * lane_offset
-            else:
-              pi_p = 0.0
+            pi_p = self.lc_kp * lane_offset
             pi_i = self.lc_ki * self.lane_centering_integral
             apply_curvature += pi_p + pi_i
             # 1Hz debug log: PI controller internals for drive analysis
@@ -308,6 +309,7 @@ class CarController(CarControllerBase):
           self.curvature_rate_deque.clear()
           self.post_reset_ramp_active = False
           self.lane_centering_integral = 0.0  # clear integral to prevent snap on re-engage
+          self.lane_offset_ema = 0.0  # reset EMA to prevent stale correction
         elif CS.out.steeringPressed:
           # Gentle override: blend toward measured so EPAS stops fighting driver.
           # alpha=0.6 at 20Hz (0.05s/step) ≈ 2-3 cycles to fully track measured.
@@ -415,6 +417,7 @@ class CarController(CarControllerBase):
         self.post_reset_ramp_active = False
         self.smooth_curvature_last = 0.0
         self.lane_centering_integral = 0.0  # clear on full disengage
+        self.lane_offset_ema = 0.0  # reset EMA
         apply_curvature_rate = 0.0
         ramp_type = 0
         apply_curv_send = self.apply_curvature_last
