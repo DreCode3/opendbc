@@ -35,7 +35,7 @@ class CarControllerParams:
         ([5, 16, 25], [0.0025, 0.0018, 0.00028]),  # raised toward mode 1 for faster curve exit
       ),
       'curvature_error': 0.004,
-      'curvature_lookup_time': ([15, 25], [0.5, 0.3]),  # speed-dependent: 0.5s at low speed (curve anticipation), 0.3s at highway (exit overshoot prevention)
+      'curvature_lookup_time': ([15, 25], [0.5, 0.35]),  # speed-dependent: 0.5s at low speed, 0.35s at highway (was 0.3 — bumped for curve exit anticipation)
       'curvature_rate_gain': 1.15,  # moderate feed-forward: 1.3 caused oversteer on moderate curves
       'smooth_tau': (0.12, 0.04),  # (low_speed, high_speed) EMA time constant in seconds
     },
