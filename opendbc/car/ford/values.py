@@ -31,12 +31,12 @@ class CarControllerParams:
     0: {
       'angle_limits': AngleSteeringLimits(
         0.02,
-        ([5, 16, 25], [0.0025, 0.0012, 0.00015]),
-        ([5, 16, 25], [0.0025, 0.0014, 0.00025]),
+        ([5, 16, 25], [0.0025, 0.0015, 0.00018]),  # raised toward mode 1 for better curve entry
+        ([5, 16, 25], [0.0025, 0.0018, 0.00028]),  # raised toward mode 1 for faster curve exit
       ),
       'curvature_error': 0.004,
-      'curvature_lookup_time': 0.3,  # reduced from 0.5: EPAS has ~600ms peak lag, 0.5s caused exit overshoot
-      'curvature_rate_gain': 1.0,
+      'curvature_lookup_time': ([15, 25], [0.6, 0.3]),  # speed-dependent: 0.6s at low speed (curve anticipation), 0.3s at highway (exit overshoot prevention)
+      'curvature_rate_gain': 1.3,  # raised from 1.0: better feed-forward for curve entry/exit
       'smooth_tau': (0.12, 0.04),  # (low_speed, high_speed) EMA time constant in seconds
     },
     1: {

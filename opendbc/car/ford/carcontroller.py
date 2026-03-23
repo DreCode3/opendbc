@@ -121,11 +121,19 @@ class CarController(CarControllerBase):
   def _apply_curve_mode(self, mode):
     """Apply curve mode preset values."""
     preset = CarControllerParams.CURVE_MODE_PARAMS.get(mode, CarControllerParams.CURVE_MODE_PARAMS[0])
-    self.curvature_lookup_time = preset['curvature_lookup_time']
+    self._curvature_lookup_time_param = preset['curvature_lookup_time']
     self.curvature_rate_gain = preset['curvature_rate_gain']
     self._active_angle_limits = preset['angle_limits']
     self._active_curvature_error = preset['curvature_error']
     self._smooth_tau = preset.get('smooth_tau', (0.12, 0.04))
+
+  def _get_curvature_lookup_time(self, v_ego):
+    """Get curvature lookup time, optionally speed-dependent."""
+    p = self._curvature_lookup_time_param
+    if isinstance(p, (list, tuple)) and len(p) == 2 and isinstance(p[0], (list, tuple)):
+      # Speed-dependent: ([speed_bps], [time_bps])
+      return float(np.interp(v_ego, p[0], p[1]))
+    return float(p)  # scalar
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -194,7 +202,8 @@ class CarController(CarControllerBase):
         # Only blend when moving to avoid noise amplification at standstill (orientationRate.z / ~0 = huge)
         if CS.out.vEgoRaw > 1.0 and self.model is not None and len(self.model.orientationRate.z) >= len(ModelConstants.T_IDXS):
           curvatures = np.array(self.model.orientationRate.z) / CS.out.vEgoRaw
-          predicted_curvature = float(np.interp(self.curvature_lookup_time, ModelConstants.T_IDXS, curvatures))
+          lookup_time = self._get_curvature_lookup_time(CS.out.vEgoRaw)
+          predicted_curvature = float(np.interp(lookup_time, ModelConstants.T_IDXS, curvatures))
         else:
           predicted_curvature = desired_curvature
 
