@@ -38,8 +38,8 @@ class CarInterface(CarInterfaceBase):
     ret.steerAtStandstill = True
 
     ret.longitudinalTuning.kiBP = [0.]
-    ret.longitudinalTuning.kpV = [0.]
-    ret.longitudinalTuning.kiV = [0.5]
+    ret.longitudinalTuning.kpV = [0.1]   # was 0.0 — add proportional for immediate response, reduces integral burden
+    ret.longitudinalTuning.kiV = [0.3]   # was 0.5 — lower to reduce overshoot from aggressive brakes/engine
 
     if not ret.radarUnavailable and DBC[candidate][Bus.radar] == RADAR.DELPHI_MRR:
       # average of 33.3 Hz radar timestep / 4 scan modes = 60 ms

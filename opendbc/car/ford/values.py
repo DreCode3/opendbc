@@ -67,10 +67,12 @@ class CarControllerParams:
   ANGLE_LIMITS: AngleSteeringLimits = CURVE_MODE_PARAMS[0]['angle_limits']
   CURVATURE_ERROR = CURVE_MODE_PARAMS[0]['curvature_error']
 
-  ACCEL_MAX = 2.0               # m/s^2 max acceleration
+  ACCEL_MAX = 1.5               # m/s^2 max acceleration (was 2.0 — reduced for tuned ST's stronger engine)
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
   MIN_GAS = -0.5
   INACTIVE_GAS = -5.0
+  COAST_ZONE_MIN = -0.5         # m/s^2 — below this, real braking is needed
+  COAST_ZONE_MAX = -0.1         # m/s^2 — above this, gas is still applied
 
   def __init__(self, CP):
     pass

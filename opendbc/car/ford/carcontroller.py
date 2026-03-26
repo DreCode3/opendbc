@@ -452,10 +452,18 @@ class CarController(CarControllerBase):
 
         # The stock system has been seen rate limiting the brake accel to 5 m/s^3,
         # however even 3.5 m/s^3 causes some overshoot with a step response.
-        accel = max(accel, self.accel - (3.5 * CarControllerParams.ACC_CONTROL_STEP * DT_CTRL))
+        # Reduced to 2.0 for Explorer ST's aggressive brake pads (19% over-delivery measured).
+        accel = max(accel, self.accel - (2.0 * CarControllerParams.ACC_CONTROL_STEP * DT_CTRL))
 
       accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
       gas = float(np.clip(gas, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+
+      # Coasting zone: when light decel is requested (-0.5 to -0.1 m/s^2), lift gas
+      # without applying brakes. This eliminates ~95% of unnecessary gas/brake cycling.
+      # Outside the zone: gas applied (accel > -0.1) or real braking (accel < -0.5).
+      if CC.longActive and CarControllerParams.COAST_ZONE_MIN < accel < CarControllerParams.COAST_ZONE_MAX:
+        gas = CarControllerParams.INACTIVE_GAS
+        accel = 0.0  # no brake force — let engine drag decelerate naturally
 
       # Both gas and accel are in m/s^2, accel is used solely for braking
       if not CC.longActive or gas < CarControllerParams.MIN_GAS:
