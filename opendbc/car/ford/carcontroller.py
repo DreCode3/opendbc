@@ -567,17 +567,18 @@ class CarController(CarControllerBase):
         bp_precharge_actuate = False
 
         # Gaining on lead, pacing, or trailing away
+        # Widened pacing deadband from ±0.1 to ±0.3 m/s to reduce state transitions
         if lead:
-          if v_rel < -0.1:
+          if v_rel < -0.3:
             gaining = True
-          elif v_rel > 0.1:
+          elif v_rel > 0.3:
             trailing = True
           else:
             pacing = True
 
         # Limits when gaining
         if gaining:
-          if lead_time_sec < 1.5:
+          if lead_time_sec < 2.0:  # was 1.5s — start coasting earlier for more buffer
             max_follow_gas = 0.0
             min_follow_gas = 0.0
           else:
@@ -588,7 +589,7 @@ class CarController(CarControllerBase):
 
         # Limits when pacing
         if pacing:
-          max_follow_gas = 0.2 + accel_due_to_pitch
+          max_follow_gas = 0.1 + accel_due_to_pitch  # was 0.2 — gentler pacing to reduce unnecessary accel
           min_follow_gas = 0.0
           max_follow_accel = op_accel
           min_follow_accel = op_accel
