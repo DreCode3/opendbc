@@ -71,8 +71,6 @@ class CarControllerParams:
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
   MIN_GAS = -0.5
   INACTIVE_GAS = -5.0
-  COAST_ZONE_MIN = -0.5         # m/s^2 — below this, real braking is needed
-  COAST_ZONE_MAX = +0.25        # m/s^2 — above this, gas is applied (covers +0.200 cruise-holding commands to eliminate gas pulsing)
 
   def __init__(self, CP):
     pass

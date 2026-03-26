@@ -115,12 +115,14 @@ def create_lat_ctl2_msg(packer, CAN: CanBus, mode: int, path_offset: float, path
   return packer.make_can_msg("LateralMotionControl2", CAN.main, values)
 
 
-def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: float, stopping: bool, brake_request, v_ego_kph: float):
+def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: float, stopping: bool,
+                   brake_actuate, precharge_actuate, v_ego_kph: float):
   """
   Creates a CAN message for the Ford ACC Command.
 
   This command can be used to enable ACC, to set the ACC gas/brake/decel values
-  and to disable ACC.
+  and to disable ACC. Precharge engages slightly before full brake for smoother
+  decel; both use hysteresis to avoid binary on/off feel.
 
   Frequency is 50Hz.
   """
@@ -128,16 +130,11 @@ def create_acc_msg(packer, CAN: CanBus, long_active: bool, gas: float, accel: fl
     "AccBrkTot_A_Rq": accel,                          # Brake total accel request: [-20|11.9449] m/s^2
     "Cmbb_B_Enbl": 1 if long_active else 0,           # Enabled: 0=No, 1=Yes
     "AccPrpl_A_Rq": gas,                              # Acceleration request: [-5|5.23] m/s^2
-    # No observed acceleration seen from this signal alone. During stock system operation, it appears to
-    # be the raw acceleration request (AccPrpl_A_Rq when positive, AccBrkTot_A_Rq when negative)
     "AccPrpl_A_Pred": -5.0,                           # Acceleration request: [-5|5.23] m/s^2
     "AccResumEnbl_B_Rq": 1 if long_active else 0,
-    # No observed acceleration seen from this signal alone
     "AccVeh_V_Trg": v_ego_kph,                        # Target speed: [0|255] km/h
-    # TODO: we may be able to improve braking response by utilizing pre-charging better
-    # When setting these two bits without AccBrkTot_A_Rq, an initial jerk is observed and car may be able to brake temporarily with AccPrpl_A_Rq
-    "AccBrkPrchg_B_Rq": 1 if brake_request else 0,            # Pre-charge brake request: 0=No, 1=Yes
-    "AccBrkDecel_B_Rq": 1 if brake_request else 0,            # Deceleration request: 0=Inactive, 1=Active
+    "AccBrkPrchg_B_Rq": 1 if precharge_actuate else 0,   # Pre-charge brake request
+    "AccBrkDecel_B_Rq": 1 if brake_actuate else 0,       # Deceleration request
     "AccStopStat_B_Rq": 1 if stopping else 0,
   }
   return packer.make_can_msg("ACCDATA", CAN.main, values)
