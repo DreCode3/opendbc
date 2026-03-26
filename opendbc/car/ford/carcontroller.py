@@ -677,10 +677,19 @@ class CarController(CarControllerBase):
       if gas != CarControllerParams.INACTIVE_GAS:
         gas = float(np.clip(gas, CarControllerParams.MIN_GAS, CarControllerParams.ACCEL_MAX))
 
-      can_sends.append(fordcan.create_acc_msg(self.packer, self.CAN, CC.longActive, gas, accel, stopping,
+      # Compensate for Explorer ST aggressive brake pads (measured 2-2.5x over-delivery at light braking)
+      # Scale only the CAN brake force value — all control logic (thresholds, rate limiting, TTC bypass)
+      # operates on the unscaled accel. This preserves brake actuation timing while reducing force.
+      # self.accel stores the UNSCALED value for the jerk limit reference on the next frame.
+      accel_for_can = accel
+      if accel < 0:
+        scale = float(np.interp(-accel, [0.0, 1.2, 2.0], [0.55, 0.55, 1.0]))
+        accel_for_can = accel * scale
+
+      can_sends.append(fordcan.create_acc_msg(self.packer, self.CAN, CC.longActive, gas, accel_for_can, stopping,
                                               brake_actuate, precharge_actuate, v_ego_kph=V_CRUISE_MAX))
 
-      self.accel = accel
+      self.accel = accel  # unscaled — used for jerk limit reference on next frame
       self.gas = gas
       self._bp_long_active_last = not self.disable_BP_long_UI
       self.op_brake_actuate_last = op_brake_actuate
