@@ -102,7 +102,7 @@ class CarController(CarControllerBase):
     self.precharge_actuate_target = -0.12
     self.precharge_actuate_release = -0.06
     self.disable_BP_long_UI = False
-    self.disable_downhill_comp_UI = True
+    self.disable_downhill_comp_UI = False  # enable downhill pitch comp — Explorer ST PCM doesn't fully compensate
 
     # BluePilot: SubMaster for model data and radar
     self.sm = messaging.SubMaster(['modelV2', 'radarState'])
@@ -166,7 +166,7 @@ class CarController(CarControllerBase):
       try:
         self.disable_downhill_comp_UI = self.params.get_bool("disable_downhill_comp_UI")
       except Exception:
-        self.disable_downhill_comp_UI = True
+        self.disable_downhill_comp_UI = False  # enable downhill pitch comp — Explorer ST PCM doesn't fully compensate
       try:
         mode_val = self.params.get("FordCurveMode")
         new_mode = int(mode_val) if mode_val is not None else 0
@@ -567,11 +567,12 @@ class CarController(CarControllerBase):
         bp_precharge_actuate = False
 
         # Gaining on lead, pacing, or trailing away
-        # Widened pacing deadband from ±0.1 to ±0.3 m/s to reduce state transitions
+        # Deadband ±0.2 m/s — wider than stock ±0.1 to reduce transitions, but
+        # tighter than ±0.3 which let the car get too close (P5 gap 0.96s)
         if lead:
-          if v_rel < -0.3:
+          if v_rel < -0.2:
             gaining = True
-          elif v_rel > 0.3:
+          elif v_rel > 0.2:
             trailing = True
           else:
             pacing = True
@@ -589,7 +590,7 @@ class CarController(CarControllerBase):
 
         # Limits when pacing
         if pacing:
-          max_follow_gas = 0.1 + accel_due_to_pitch  # was 0.2 — gentler pacing to reduce unnecessary accel
+          max_follow_gas = 0.05 + accel_due_to_pitch  # was 0.2→0.1→0.05 — near-coast pacing to minimize unnecessary accel
           min_follow_gas = 0.0
           max_follow_accel = op_accel
           min_follow_accel = op_accel
