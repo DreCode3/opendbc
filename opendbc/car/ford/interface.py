@@ -53,9 +53,10 @@ class CarInterface(CarInterfaceBase):
     ret.safetyConfigs = cfgs
 
     ret.alphaLongitudinalAvailable = ret.radarUnavailable
-    if alpha_long or not ret.radarUnavailable:
-      ret.safetyConfigs[-1].safetyParam |= FordSafetyFlags.LONG_CONTROL.value
-      ret.openpilotLongitudinalControl = True
+    # Always enable openpilot longitudinal for Explorer ST (hardcoded — AlphaLongitudinalEnabled
+    # param is DEVELOPMENT_ONLY and clears on every reboot, making it unusable)
+    ret.safetyConfigs[-1].safetyParam |= FordSafetyFlags.LONG_CONTROL.value
+    ret.openpilotLongitudinalControl = True
 
     if ret.flags & FordFlags.CANFD:
       ret.safetyConfigs[-1].safetyParam |= FordSafetyFlags.CANFD.value
