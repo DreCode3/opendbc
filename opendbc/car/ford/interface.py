@@ -37,9 +37,9 @@ class CarInterface(CarInterfaceBase):
     ret.steerLimitTimer = 1.0
     ret.steerAtStandstill = True
 
-    ret.longitudinalTuning.kiBP = [0., 13., 25.]   # speed-dependent Ki: ramp starts at 30 mph for benefit on surface streets
+    ret.longitudinalTuning.kiBP = [0., 13., 25., 27.]   # speed-dependent Ki: flat 0.20 for surface streets, drop at highway
     ret.longitudinalTuning.kpV = [0.]     # integral-only — Kp causes longitudinal hunting (100+ reversals/5s)
-    ret.longitudinalTuning.kiV = [0.3, 0.2, 0.15]   # ST's aggressive pads overshoot 2x; slower integral gives feedback loop time to correct
+    ret.longitudinalTuning.kiV = [0.3, 0.2, 0.2, 0.15]   # 0.30 stop-and-go, 0.20 flat 30-55mph, 0.15 at 60+ mph
 
     if not ret.radarUnavailable and DBC[candidate][Bus.radar] == RADAR.DELPHI_MRR:
       # average of 33.3 Hz radar timestep / 4 scan modes = 60 ms
