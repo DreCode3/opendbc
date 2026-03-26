@@ -96,7 +96,7 @@ class CarController(CarControllerBase):
     self.bpSpeedAllow = False
     self.op_brake_actuate_last = False
     self.MAX_URBAN_SPEED_MPH = 45.0
-    self.following_accel_ROC = 0.002  # max accel change per scan when in following mode
+    self.following_accel_ROC = 0.004  # max accel change per scan when in following mode (was 0.002 — too abrupt)
     self.brake_actuate_target = -0.14
     self.brake_actuate_release = -0.06
     self.precharge_actuate_target = -0.12
@@ -614,8 +614,11 @@ class CarController(CarControllerBase):
         bp_accel = float(np.clip(op_accel, min_follow_accel, max_follow_accel))
 
         # Rate limit braking to dampen initial hit, but only when no imminent collision
-        if ttc_sec > 8.0 and lead_time_sec > 0.5:
-          bp_accel = float(np.clip(bp_accel, self.bp_accel_last - self.following_accel_ROC, 999))
+        if ttc_sec > 10.0 and lead_time_sec > 0.5:  # was 8.0 — rate limit braking for longer before safety override
+          # Rate limit both directions: smooth brake onset AND smooth recovery from braking
+          bp_accel = float(np.clip(bp_accel,
+                                   self.bp_accel_last - self.following_accel_ROC,
+                                   self.bp_accel_last + self.following_accel_ROC))
 
         # Set brake_actuate and precharge_actuate flags with independent thresholds
         if bp_accel < self.brake_actuate_target:
