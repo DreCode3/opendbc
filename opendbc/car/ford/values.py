@@ -72,7 +72,7 @@ class CarControllerParams:
   MIN_GAS = -0.5
   INACTIVE_GAS = -5.0
   COAST_ZONE_MIN = -0.5         # m/s^2 — below this, real braking is needed
-  COAST_ZONE_MAX = -0.1         # m/s^2 — above this, gas is still applied
+  COAST_ZONE_MAX = +0.05        # m/s^2 — above this, gas is applied (widened from -0.1 to reduce gas/brake cycling)
 
   def __init__(self, CP):
     pass
