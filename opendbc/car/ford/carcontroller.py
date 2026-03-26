@@ -97,10 +97,10 @@ class CarController(CarControllerBase):
     self.op_brake_actuate_last = False
     self.MAX_URBAN_SPEED_MPH = 45.0
     self.following_accel_ROC = 0.004  # max accel change per scan when in following mode (was 0.002 — too abrupt)
-    self.brake_actuate_target = -0.14
-    self.brake_actuate_release = -0.06
-    self.precharge_actuate_target = -0.12
-    self.precharge_actuate_release = -0.06
+    self.brake_actuate_target = -0.25   # was -0.14 — delayed for Explorer ST aggressive brake pads (2-3x over-delivery)
+    self.brake_actuate_release = -0.08  # was -0.06 — slightly wider hysteresis to reduce on/off cycling
+    self.precharge_actuate_target = -0.20  # was -0.12 — engage later so pads don't grip too early
+    self.precharge_actuate_release = -0.08  # was -0.06
     self.disable_BP_long_UI = False
     self.disable_downhill_comp_UI = True  # disable downhill pitch comp — enabling caused 23% more gas/brake transitions
 
