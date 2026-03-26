@@ -672,11 +672,6 @@ class CarController(CarControllerBase):
         gas = CarControllerParams.INACTIVE_GAS
         self.gas_ema = 0.0
 
-      # Scale brake commands for Explorer ST aggressive pads (measured 1.87x avg, 2.52x peak overshoot)
-      # At 0.5x scaling, effective delivery becomes ~0.93x (close to 1:1)
-      if accel < 0:
-        accel = accel * 0.5
-
       # Clip to ford.h ACCDATA safety limits
       accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
       if gas != CarControllerParams.INACTIVE_GAS:
