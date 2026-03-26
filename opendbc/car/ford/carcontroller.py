@@ -458,10 +458,10 @@ class CarController(CarControllerBase):
       gas = float(np.clip(gas, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
       # Speed-error-based soft gas ramp + coasting
-      # Instead of binary coast/gas, modulate gas based on how far below target speed:
-      #   Within ~1 mph (0.45 m/s): coast — no gas, no brakes (close enough)
-      #   1-3 mph below: gentle gas (20-100% ramp) — feather the throttle
-      #   >3 mph below: full PID response — real acceleration needed
+      # Modulate gas based on how far below target speed:
+      #   Within 0.5 mph (0.22 m/s): coast — close enough, drag is minimal
+      #   0.5-2 mph below: ramped gas (0-100%) — feather the throttle
+      #   >2 mph below: full PID response — real acceleration needed
       # For decel commands (planner < 0): coast if light (-0.5 to 0), brake if heavy (< -0.5)
       planner_accel = actuators.accel
       if CC.longActive:
@@ -474,12 +474,12 @@ class CarController(CarControllerBase):
         else:
           # acceleration requested — ramp gas based on speed error
           speed_error = CS.out.cruiseState.speed - CS.out.vEgoRaw  # positive = below target
-          if speed_error < 0.45:  # within ~1 mph of target
+          if speed_error < 0.22:  # within ~0.5 mph of target
             gas = CarControllerParams.INACTIVE_GAS  # coast — close enough
             accel = 0.0
           else:
-            # Ramp: 0% at 0.45 m/s error, 100% at 1.8 m/s (~3 mph) error
-            gas_factor = float(np.clip((speed_error - 0.45) / 1.35, 0.0, 1.0))
+            # Ramp: 0% at 0.22 m/s error, 100% at 0.90 m/s (~2 mph) error
+            gas_factor = float(np.clip((speed_error - 0.22) / 0.68, 0.0, 1.0))
             gas = gas * gas_factor
             if gas < CarControllerParams.MIN_GAS:
               gas = CarControllerParams.INACTIVE_GAS
