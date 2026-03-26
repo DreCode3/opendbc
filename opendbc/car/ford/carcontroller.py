@@ -457,13 +457,32 @@ class CarController(CarControllerBase):
       accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
       gas = float(np.clip(gas, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
-      # Coasting zone: when planner commands light decel (-0.5 to +0.05 m/s^2),
-      # lift gas without applying brakes. Let the planner decide when to coast —
-      # don't override with lead-aware logic (that fights the planner).
+      # Speed-error-based soft gas ramp + coasting
+      # Instead of binary coast/gas, modulate gas based on how far below target speed:
+      #   Within ~1 mph (0.45 m/s): coast — no gas, no brakes (close enough)
+      #   1-3 mph below: gentle gas (20-100% ramp) — feather the throttle
+      #   >3 mph below: full PID response — real acceleration needed
+      # For decel commands (planner < 0): coast if light (-0.5 to 0), brake if heavy (< -0.5)
       planner_accel = actuators.accel
-      if CC.longActive and CarControllerParams.COAST_ZONE_MIN < planner_accel < CarControllerParams.COAST_ZONE_MAX:
-        gas = CarControllerParams.INACTIVE_GAS
-        accel = 0.0  # coast — no brake force
+      if CC.longActive:
+        if planner_accel < CarControllerParams.COAST_ZONE_MIN:
+          pass  # hard braking — let PID output through unchanged
+        elif planner_accel < 0:
+          # light decel — coast instead of braking
+          gas = CarControllerParams.INACTIVE_GAS
+          accel = 0.0
+        else:
+          # acceleration requested — ramp gas based on speed error
+          speed_error = CS.out.cruiseState.speed - CS.out.vEgoRaw  # positive = below target
+          if speed_error < 0.45:  # within ~1 mph of target
+            gas = CarControllerParams.INACTIVE_GAS  # coast — close enough
+            accel = 0.0
+          else:
+            # Ramp: 0% at 0.45 m/s error, 100% at 1.8 m/s (~3 mph) error
+            gas_factor = float(np.clip((speed_error - 0.45) / 1.35, 0.0, 1.0))
+            gas = gas * gas_factor
+            if gas < CarControllerParams.MIN_GAS:
+              gas = CarControllerParams.INACTIVE_GAS
 
       # Both gas and accel are in m/s^2, accel is used solely for braking
       if not CC.longActive or gas < CarControllerParams.MIN_GAS:
