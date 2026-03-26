@@ -93,6 +93,7 @@ class CarController(CarControllerBase):
     self._bp_long_active_last = False
     self.bp_gas_last = 0.0
     self.bp_accel_last = 0.0
+    self.gas_ema = 0.0  # EMA-smoothed gas output to reduce drivetrain jitter
     self.bpSpeedAllow = False
     self.op_brake_actuate_last = False
     self.MAX_URBAN_SPEED_MPH = 45.0
@@ -602,12 +603,12 @@ class CarController(CarControllerBase):
           max_follow_accel = op_accel
           min_follow_accel = op_accel
 
-        # Limits with no lead
+        # Limits with no lead — pass through PID output unchanged
         if lead is None:
           max_follow_gas = op_gas
           min_follow_gas = op_gas
-          max_follow_accel = 0
-          min_follow_accel = 0
+          max_follow_accel = op_accel
+          min_follow_accel = op_accel
 
         # Apply BP gas and accel targets
         bp_gas = float(np.clip(op_gas, min_follow_gas, max_follow_gas))
@@ -657,9 +658,19 @@ class CarController(CarControllerBase):
         brake_actuate = op_brake_actuate
         precharge_actuate = op_brake_actuate
 
+      # EMA-smooth gas output to reduce drivetrain jitter (9x amplification measured)
+      # tau=0.3s at 50Hz (ACC_CONTROL_STEP=2): alpha = 1 - exp(-0.02/0.3) ≈ 0.065
+      if CC.longActive and gas > CarControllerParams.MIN_GAS:
+        gas_alpha = 0.065
+        self.gas_ema = gas_alpha * gas + (1 - gas_alpha) * self.gas_ema
+        gas = self.gas_ema
+      else:
+        self.gas_ema = 0.0
+
       # No brake and gas at the same time
       if brake_actuate:
         gas = CarControllerParams.INACTIVE_GAS
+        self.gas_ema = 0.0
 
       # Clip to ford.h ACCDATA safety limits
       accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
