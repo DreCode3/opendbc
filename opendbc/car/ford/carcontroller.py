@@ -90,8 +90,8 @@ class CarController(CarControllerBase):
     self.lead_distance_bars_last = None
     self.distance_bar_frame = 0
 
-    # BluePilot: SubMaster for model data and radar
-    self.sm = messaging.SubMaster(['modelV2', 'radarState'])
+    # BluePilot: SubMaster for model data
+    self.sm = messaging.SubMaster(['modelV2'])
     self.model = None
 
     # BluePilot: Predicted curvature blending
@@ -457,31 +457,13 @@ class CarController(CarControllerBase):
       accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
       gas = float(np.clip(gas, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
-      # Three-phase lead-aware deceleration:
-      #   Phase 1 (COAST): Closing lead detected — lift gas, let engine drag slow naturally
-      #   Phase 2 (GENTLE BRAKE): Planner commands light decel — coast zone handles it
-      #   Phase 3 (FULL BRAKE): Planner commands hard decel — pass through to brakes
-      #
-      # The planner often waits too long to react to closing leads, then commands emergency
-      # braking. By coasting as soon as a closing lead is detected, we start decelerating
-      # 2-5 seconds before the planner reacts, making the transition much smoother.
+      # Coasting zone: when planner commands light decel (-0.5 to +0.05 m/s^2),
+      # lift gas without applying brakes. Let the planner decide when to coast —
+      # don't override with lead-aware logic (that fights the planner).
       planner_accel = actuators.accel
-      lead_coast = False
-      if CC.longActive and self.sm.updated['radarState']:
-        lead = self.sm['radarState'].leadOne
-        if lead.status:
-          closing_speed = -lead.vRel  # positive = getting closer (vRel is negative when closing)
-          closing_mph = closing_speed * 2.237
-          # Coast when: lead detected AND closing at >5 mph AND planner isn't already hard-braking
-          if closing_mph > 5.0 and planner_accel > -0.5:
-            lead_coast = True
-
-      # Apply coasting: either lead-triggered or planner-triggered light decel
-      if CC.longActive and (lead_coast or (CarControllerParams.COAST_ZONE_MIN < planner_accel < CarControllerParams.COAST_ZONE_MAX)):
+      if CC.longActive and CarControllerParams.COAST_ZONE_MIN < planner_accel < CarControllerParams.COAST_ZONE_MAX:
         gas = CarControllerParams.INACTIVE_GAS
-        # Only zero out brakes if planner isn't commanding significant decel
-        if planner_accel > -0.5:
-          accel = 0.0  # coast — no brake force
+        accel = 0.0  # coast — no brake force
 
       # Both gas and accel are in m/s^2, accel is used solely for braking
       if not CC.longActive or gas < CarControllerParams.MIN_GAS:
