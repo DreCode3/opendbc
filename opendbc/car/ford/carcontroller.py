@@ -294,7 +294,10 @@ class CarController(CarControllerBase):
             if abs(apply_curvature) < 0.005 and not CS.out.steeringPressed:
               lc_integral_step = lane_offset * smooth_dt
               self.lane_centering_integral += lc_integral_step
-              self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -0.3, 0.3))
+              # Speed-dependent integral cap: more correction authority at highway speed
+              # where persistent left bias (+0.27m at 65+mph) needs stronger I-term
+              int_cap = float(np.interp(CS.out.vEgoRaw, [20., 30.], [0.3, 0.6]))
+              self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -int_cap, int_cap))
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
             pi_p = self.lc_kp * lane_offset
