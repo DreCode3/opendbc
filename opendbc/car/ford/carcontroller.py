@@ -98,10 +98,10 @@ class CarController(CarControllerBase):
     self.op_brake_actuate_last = False
     self.MAX_URBAN_SPEED_MPH = 45.0
     self.following_accel_ROC = 0.004  # max accel change per scan when in following mode (was 0.002 — too abrupt)
-    self.brake_actuate_target = -0.25   # was -0.14 — delayed for Explorer ST aggressive brake pads (2-3x over-delivery)
-    self.brake_actuate_release = -0.08  # was -0.06 — slightly wider hysteresis to reduce on/off cycling
-    self.precharge_actuate_target = -0.20  # was -0.12 — engage later so pads don't grip too early
-    self.precharge_actuate_release = -0.08  # was -0.06
+    self.brake_actuate_target = -0.19   # lowered from -0.25 — 0.82x scaling now handles pad compensation
+    self.brake_actuate_release = -0.08
+    self.precharge_actuate_target = -0.15  # lowered from -0.20 — 0.82x scaling handles pad compensation
+    self.precharge_actuate_release = -0.08
     self.disable_BP_long_UI = False
     self.disable_downhill_comp_UI = True  # disable downhill pitch comp — enabling caused 23% more gas/brake transitions
 
@@ -473,7 +473,13 @@ class CarController(CarControllerBase):
     if self.CP.openpilotLongitudinalControl and (self.frame % CarControllerParams.ACC_CONTROL_STEP) == 0:
       # First calculate the stock logic's accel, gas, and brake request
       op_accel = actuators.accel
-      op_gas = op_accel
+      # Compensate for Explorer ST aggressive brake pads (1.32x over-delivery measured)
+      # Scale brake output so pads deliver ~1.08x (0.82 × 1.32 = 1.08). Applied before
+      # BP Long so all downstream logic (thresholds, rate limits) operates in scaled space.
+      # PID feedback stays stable: car delivers ~a_target, error stays near zero.
+      if op_accel < 0:
+        op_accel *= 0.82
+      op_gas = actuators.accel  # gas uses UNSCALED value
 
       if CC.longActive:
         # Compensate for engine creep at low speed.
@@ -581,9 +587,11 @@ class CarController(CarControllerBase):
           else:
             pacing = True
 
-        # Limits when gaining
+        # Limits when gaining — speed-dependent coast threshold
+        # Coast earlier at highway speed (drag is effective), shorter at low speed (responsive)
         if gaining:
-          if lead_time_sec < 2.0:  # was 1.5s — start coasting earlier for more buffer
+          coast_time = float(np.interp(CS.out.vEgoRaw, [13., 20., 27., 36.], [1.5, 2.5, 3.5, 4.0]))
+          if lead_time_sec < coast_time:
             max_follow_gas = 0.0
             min_follow_gas = 0.0
           else:
@@ -592,12 +600,18 @@ class CarController(CarControllerBase):
           max_follow_accel = op_accel
           min_follow_accel = op_accel
 
-        # Limits when pacing
+        # Limits when pacing — coast when lead is same speed or faster with reasonable gap
+        # Prevents hard braking when a car merges at your speed. Brakes resume immediately
+        # when v_rel goes negative (lead starts slowing) or gap drops below 1.0s.
         if pacing:
-          max_follow_gas = 0.1 + accel_due_to_pitch  # was 0.2→0.1 — gentle pacing, best balance of comfort and following
+          max_follow_gas = 0.1 + accel_due_to_pitch
           min_follow_gas = 0.0
-          max_follow_accel = op_accel
-          min_follow_accel = op_accel
+          if v_rel >= 0 and lead_time_sec > 1.0:
+            max_follow_accel = 0.0  # coast — gap is stable, don't brake
+            min_follow_accel = 0.0
+          else:
+            max_follow_accel = op_accel
+            min_follow_accel = op_accel
 
         # Limits when trailing
         if trailing:
