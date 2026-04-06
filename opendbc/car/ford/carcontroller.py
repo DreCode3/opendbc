@@ -337,7 +337,7 @@ class CarController(CarControllerBase):
         # Fade to zero in curves — bias is a straight-line phenomenon, and the offset
         # causes right drift in right-hand curves when applied unconditionally.
         # CAN message NEGATES before sending, so adding here shifts rightward on wire.
-        offset_scale = float(np.interp(abs(apply_curvature), [0.0, 0.001, 0.002], [1.0, 0.5, 0.0]))
+        offset_scale = float(np.interp(abs(apply_curvature), [0.0005, 0.0015, 0.003], [1.0, 0.5, 0.0]))
         apply_curvature += 0.000080 * offset_scale
 
         # Measured curvature: used for driver override tracking and rate limiting
