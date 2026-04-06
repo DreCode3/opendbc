@@ -306,10 +306,11 @@ class CarController(CarControllerBase):
               int_cap = float(np.interp(CS.out.vEgoRaw, [20., 30.], [0.3, 1.0]))
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -int_cap, int_cap))
               # Zero-crossing decay: when offset crosses center (sign differs from integral),
-              # rapidly decay the integral to prevent overshoot. This allows higher cap without
-              # the oscillation seen at ±1.0 with simple clamping.
+              # gently decay the integral to prevent overshoot. Reduced from 0.92 to 0.97
+              # to let the integral hold corrective authority longer (was decaying too fast
+              # to counter the persistent +0.22m left bias).
               if lane_offset * self.lane_centering_integral < 0:  # offset and integral disagree
-                self.lane_centering_integral *= 0.92  # fast decay toward zero
+                self.lane_centering_integral *= 0.97  # gentle decay toward zero
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
 
@@ -330,6 +331,11 @@ class CarController(CarControllerBase):
             self.lane_centering_integral *= 0.98  # decay when lane lines not confident enough
         else:
           self.lane_centering_integral *= 0.98  # decay below speed gate or no model
+
+        # Static EPAS bias compensation: EPAS consistently over-delivers by +0.000245 1/m
+        # on straights (measured across routes 20-22, all speeds). Subtract to center the
+        # commanded curvature around the actual vehicle response.
+        apply_curvature -= 0.000245
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
