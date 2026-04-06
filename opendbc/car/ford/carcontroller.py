@@ -121,10 +121,18 @@ class CarController(CarControllerBase):
 
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
-    self.lane_centering_integral = 0.0  # PI integral accumulator (m·s)
     self.lane_offset_ema = 0.0  # EMA-smoothed lane offset to filter lane line noise
     self.lc_kp = 0.0001  # curvature per meter of lane offset (P term) — very low, I-term does the work
     self.lc_ki = 0.0002  # curvature per meter·second of accumulated offset (I term) — handles persistent drift smoothly
+    self.lane_centering_integral_save_counter = 0  # save integral every 10s (200 steer frames)
+
+    # Persistent integral: restore from previous drive to eliminate cold-start left bias
+    try:
+      saved = self.params.get("LaneBiasIntegral")
+      self.lane_centering_integral = float(saved) if saved else 0.0
+      carlog.info("LC: restored integral=%.4f from previous drive" % self.lane_centering_integral)
+    except Exception:
+      self.lane_centering_integral = 0.0
 
     # BluePilot: Human turn detection and post-reset ramp (Phase 3)
     self.reset_steering_last = False
@@ -294,12 +302,22 @@ class CarController(CarControllerBase):
             if abs(apply_curvature) < 0.005 and not CS.out.steeringPressed:
               lc_integral_step = lane_offset * smooth_dt
               self.lane_centering_integral += lc_integral_step
-              # Speed-dependent integral cap: more correction authority at highway speed
-              # where persistent left bias (+0.27m at 65+mph) needs stronger I-term
-              int_cap = float(np.interp(CS.out.vEgoRaw, [20., 30.], [0.3, 0.6]))
+              # Speed-dependent integral cap: raised to ±1.0 at highway with zero-crossing decay
+              int_cap = float(np.interp(CS.out.vEgoRaw, [20., 30.], [0.3, 1.0]))
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -int_cap, int_cap))
+              # Zero-crossing decay: when offset crosses center (sign differs from integral),
+              # rapidly decay the integral to prevent overshoot. This allows higher cap without
+              # the oscillation seen at ±1.0 with simple clamping.
+              if lane_offset * self.lane_centering_integral < 0:  # offset and integral disagree
+                self.lane_centering_integral *= 0.92  # fast decay toward zero
             else:
               self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
+
+            # Persist integral every 10s for warm-start on next drive
+            self.lane_centering_integral_save_counter += 1
+            if self.lane_centering_integral_save_counter >= 200:  # 200 steer frames = 10s at 20Hz
+              self.params.put_nonblocking("LaneBiasIntegral", str(round(self.lane_centering_integral, 4)))
+              self.lane_centering_integral_save_counter = 0
             pi_p = self.lc_kp * lane_offset
             pi_i = self.lc_ki * self.lane_centering_integral
             apply_curvature += pi_p + pi_i
@@ -604,7 +622,7 @@ class CarController(CarControllerBase):
         # Prevents hard braking when a car merges at your speed. Brakes resume immediately
         # when v_rel goes negative (lead starts slowing) or gap drops below 1.0s.
         if pacing:
-          max_follow_gas = 0.15 + accel_due_to_pitch  # was 0.1 — slightly more gas authority reduces PID windup during pacing
+          max_follow_gas = 0.12 + accel_due_to_pitch  # was 0.10→0.15→0.12 — balance between PID windup and eager acceleration
           min_follow_gas = 0.0
           if v_rel >= 0 and lead_time_sec > 1.0:
             max_follow_accel = 0.0  # coast — gap is stable, don't brake
