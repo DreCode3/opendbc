@@ -332,10 +332,10 @@ class CarController(CarControllerBase):
         else:
           self.lane_centering_integral *= 0.98  # decay below speed gate or no model
 
-        # Static EPAS bias compensation: EPAS consistently over-delivers by +0.000245 1/m
-        # on straights (measured across routes 20-22, all speeds). Subtract to center the
-        # commanded curvature around the actual vehicle response.
-        apply_curvature -= 0.000245
+        # Static EPAS bias compensation: EPAS over-delivers leftward by +0.000245 1/m
+        # (positive = left in code, but CAN message NEGATES before sending to EPAS).
+        # Adding here shifts the CAN command rightward to counter the left bias.
+        apply_curvature += 0.000245
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
