@@ -233,7 +233,7 @@ class CarController(CarControllerBase):
 
         # Speed-dependent blend: ramp up for surface street curve anticipation,
         # ramp back down at highway speed to reduce 2x smoothness ratio (0.194 Hz hunting)
-        blend = float(np.interp(CS.out.vEgoRaw, [7., 20., 27., 35.], [0.10, 0.30, 0.25, 0.15]))
+        blend = float(np.interp(CS.out.vEgoRaw, [7., 20., 27., 35.], [0.10, 0.30, 0.20, 0.10]))  # reduced highway blend to cut 1.2x smoothness ratio
         apply_curvature = (predicted_curvature * blend) + (desired_curvature * (1 - blend))
 
         # Low-speed curvature stabilizer: deadband + EMA
@@ -604,7 +604,7 @@ class CarController(CarControllerBase):
         # Prevents hard braking when a car merges at your speed. Brakes resume immediately
         # when v_rel goes negative (lead starts slowing) or gap drops below 1.0s.
         if pacing:
-          max_follow_gas = 0.1 + accel_due_to_pitch
+          max_follow_gas = 0.15 + accel_due_to_pitch  # was 0.1 — slightly more gas authority reduces PID windup during pacing
           min_follow_gas = 0.0
           if v_rel >= 0 and lead_time_sec > 1.0:
             max_follow_accel = 0.0  # coast — gap is stable, don't brake
