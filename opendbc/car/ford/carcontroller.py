@@ -332,10 +332,11 @@ class CarController(CarControllerBase):
         else:
           self.lane_centering_integral *= 0.98  # decay below speed gate or no model
 
-        # Static EPAS bias compensation: EPAS over-delivers leftward by +0.000245 1/m
-        # (positive = left in code, but CAN message NEGATES before sending to EPAS).
-        # Adding here shifts the CAN command rightward to counter the left bias.
-        apply_curvature += 0.000245
+        # Partial EPAS bias compensation: EPAS over-delivers leftward by ~0.000245 1/m.
+        # Apply ~1/3 as static offset; PI controller (0.97 decay) adapts for the rest.
+        # Conservative to avoid overcorrection (full 0.000245 caused -0.21m right bias).
+        # CAN message NEGATES before sending, so adding here shifts rightward on wire.
+        apply_curvature += 0.000080
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
