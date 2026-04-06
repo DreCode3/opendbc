@@ -334,9 +334,11 @@ class CarController(CarControllerBase):
 
         # Partial EPAS bias compensation: EPAS over-delivers leftward by ~0.000245 1/m.
         # Apply ~1/3 as static offset; PI controller (0.97 decay) adapts for the rest.
-        # Conservative to avoid overcorrection (full 0.000245 caused -0.21m right bias).
+        # Fade to zero in curves — bias is a straight-line phenomenon, and the offset
+        # causes right drift in right-hand curves when applied unconditionally.
         # CAN message NEGATES before sending, so adding here shifts rightward on wire.
-        apply_curvature += 0.000080
+        offset_scale = float(np.interp(abs(apply_curvature), [0.0, 0.001, 0.002], [1.0, 0.5, 0.0]))
+        apply_curvature += 0.000080 * offset_scale
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
