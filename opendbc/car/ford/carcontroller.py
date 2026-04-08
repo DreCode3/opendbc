@@ -336,7 +336,7 @@ class CarController(CarControllerBase):
         # PI (Kp=0.0005, decay=0.995) handles dynamics. Interpolated from data:
         # offset 0.000000 → +0.20m left, offset 0.000050 → -0.14m right → zero at ~0.000025.
         # No curve fade needed at this magnitude (10% of EPAS bias).
-        apply_curvature += 0.000025
+        apply_curvature += 0.000035
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
