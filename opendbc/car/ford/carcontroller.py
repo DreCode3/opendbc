@@ -703,12 +703,12 @@ class CarController(CarControllerBase):
         precharge_actuate = op_brake_actuate
 
       # EMA-smooth gas output to reduce drivetrain jitter (9x amplification measured)
-      # Asymmetric tau: fast ramp-up (0.3s), slow ramp-down (0.8s) for smooth coast lift-off
+      # Asymmetric tau: fast ramp-up (0.3s), slow ramp-down (1.2s) for smooth coast lift-off
       # tau=0.3s at 50Hz: alpha = 1 - exp(-0.02/0.3) ≈ 0.065
-      # tau=0.8s at 50Hz: alpha = 1 - exp(-0.02/0.8) ≈ 0.025
+      # tau=1.2s at 50Hz: alpha = 1 - exp(-0.02/1.2) ≈ 0.0167
       if CC.longActive and gas > CarControllerParams.MIN_GAS:
         if gas < self.gas_ema:
-          gas_alpha = 0.025  # slow ramp-down — gentle lift-off during coast
+          gas_alpha = 0.0167  # tau=1.2s — gentle lift-off during coast (~3s to near-zero)
         else:
           gas_alpha = 0.065  # fast ramp-up — responsive acceleration
         self.gas_ema = gas_alpha * gas + (1 - gas_alpha) * self.gas_ema
