@@ -122,7 +122,7 @@ class CarController(CarControllerBase):
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
     self.lane_offset_ema = 0.0  # EMA-smoothed lane offset to filter lane line noise
-    self.lc_kp = 0.0001  # curvature per meter of lane offset (P term) — very low, I-term does the work
+    self.lc_kp = 0.0005  # was 0.0001 — 5x for meaningful curve correction (noise still <2% of planner)
     self.lc_ki = 0.0002  # curvature per meter·second of accumulated offset (I term) — handles persistent drift smoothly
     self.lane_centering_integral_save_counter = 0  # save integral every 10s (200 steer frames)
 
@@ -312,7 +312,7 @@ class CarController(CarControllerBase):
               if lane_offset * self.lane_centering_integral < 0:  # offset and integral disagree
                 self.lane_centering_integral *= 0.97  # gentle decay toward zero
             else:
-              self.lane_centering_integral *= 0.98  # decay during curves or driver overrides
+              self.lane_centering_integral *= 0.995  # was 0.98 — retain 61% through 5s curve vs 13%
 
             # Persist integral every 10s for warm-start on next drive
             self.lane_centering_integral_save_counter += 1
