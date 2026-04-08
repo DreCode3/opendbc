@@ -332,13 +332,10 @@ class CarController(CarControllerBase):
         else:
           self.lane_centering_integral *= 0.98  # decay below speed gate or no model
 
-        # Partial EPAS bias compensation: EPAS over-delivers leftward by ~0.000245 1/m.
-        # Apply ~1/3 as static offset; PI controller (0.97 decay) adapts for the rest.
-        # Fade to zero in curves — bias is a straight-line phenomenon, and the offset
-        # causes right drift in right-hand curves when applied unconditionally.
-        # CAN message NEGATES before sending, so adding here shifts rightward on wire.
-        offset_scale = float(np.interp(abs(apply_curvature), [0.0005, 0.0015, 0.003], [1.0, 0.5, 0.0]))
-        apply_curvature += 0.000050 * offset_scale
+        # EPAS bias compensation: DISABLED — static offset consistently overcorrected
+        # across multiple tuning attempts (0.000245, 0.000080, 0.000050 all caused right
+        # bias). PI controller with 0.97 zero-crossing decay handles the bias adaptively.
+        # Re-enable only if PI proves insufficient on extended drives.
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
@@ -631,7 +628,7 @@ class CarController(CarControllerBase):
         # Prevents hard braking when a car merges at your speed. Brakes resume immediately
         # when v_rel goes negative (lead starts slowing) or gap drops below 1.0s.
         if pacing:
-          max_follow_gas = 0.12 + accel_due_to_pitch  # was 0.10→0.15→0.12 — balance between PID windup and eager acceleration
+          max_follow_gas = 0.07 + accel_due_to_pitch  # was 0.12→0.07 — reduce pacing overshoot at tighter T_FOLLOW
           min_follow_gas = 0.0
           if v_rel >= 0 and lead_time_sec > 1.0:
             max_follow_accel = 0.0  # coast — gap is stable, don't brake
