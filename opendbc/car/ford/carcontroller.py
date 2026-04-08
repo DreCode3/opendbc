@@ -602,12 +602,16 @@ class CarController(CarControllerBase):
         bp_precharge_actuate = False
 
         # Gaining on lead, pacing, or trailing away
-        # Deadband ±0.2 m/s — wider than stock ±0.1 to reduce transitions, but
-        # tighter than ±0.3 which let the car get too close (P5 gap 0.96s)
+        # Speed-dependent deadband: ±0.2 at low speed, ±0.4 at highway.
+        # At 80 mph, ±0.2 m/s = ±0.45 mph — normal lead cruise variance (±0.3 m/s)
+        # crosses both thresholds constantly, causing 170-280 state transitions/min.
+        # ±0.4 m/s at highway keeps lead variance in pacing band (80-90% fewer transitions).
+        # Safe because classification only gates gas — brakes flow through planner always.
+        follow_deadband = float(np.interp(v_ego, [13., 30.], [0.2, 0.4]))
         if lead:
-          if v_rel < -0.2:
+          if v_rel < -follow_deadband:
             gaining = True
-          elif v_rel > 0.2:
+          elif v_rel > follow_deadband:
             trailing = True
           else:
             pacing = True
@@ -629,7 +633,7 @@ class CarController(CarControllerBase):
         # Prevents hard braking when a car merges at your speed. Brakes resume immediately
         # when v_rel goes negative (lead starts slowing) or gap drops below 1.0s.
         if pacing:
-          max_follow_gas = 0.07 + accel_due_to_pitch  # was 0.12→0.07 — reduce pacing overshoot at tighter T_FOLLOW
+          max_follow_gas = 0.10 + accel_due_to_pitch  # was 0.07→0.10 — 0.07 too passive at highway (0.011 effective)
           min_follow_gas = 0.0
           if v_rel >= 0 and lead_time_sec > 1.0:
             max_follow_accel = 0.0  # coast — gap is stable, don't brake
