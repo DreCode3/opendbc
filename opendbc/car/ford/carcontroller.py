@@ -338,7 +338,7 @@ class CarController(CarControllerBase):
         # causes right drift in right-hand curves when applied unconditionally.
         # CAN message NEGATES before sending, so adding here shifts rightward on wire.
         offset_scale = float(np.interp(abs(apply_curvature), [0.0005, 0.0015, 0.003], [1.0, 0.5, 0.0]))
-        apply_curvature += 0.000080 * offset_scale
+        apply_curvature += 0.000050 * offset_scale
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
@@ -716,10 +716,12 @@ class CarController(CarControllerBase):
       else:
         self.gas_ema = 0.0
 
-      # No brake and gas at the same time
+      # No brake and gas at the same time — ramp to 0.0 instead of hard-cutting
+      # to INACTIVE_GAS (-5.0). The hard cut bypassed the EMA entirely, causing
+      # the abrupt throttle drop the driver feels. The EMA handles the ramp-down
+      # naturally; AccBrkDecel_B_Rq controls actual braking independently.
       if brake_actuate:
-        gas = CarControllerParams.INACTIVE_GAS
-        self.gas_ema = 0.0
+        gas = 0.0  # EMA ramps down from here; don't reset EMA state
 
       # Clip to ford.h ACCDATA safety limits
       accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
