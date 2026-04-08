@@ -332,10 +332,11 @@ class CarController(CarControllerBase):
         else:
           self.lane_centering_integral *= 0.98  # decay below speed gate or no model
 
-        # EPAS bias compensation: DISABLED — static offset consistently overcorrected
-        # across multiple tuning attempts (0.000245, 0.000080, 0.000050 all caused right
-        # bias). PI controller with 0.97 zero-crossing decay handles the bias adaptively.
-        # Re-enable only if PI proves insufficient on extended drives.
+        # Minimal EPAS bias compensation: tiny offset for the constant component.
+        # PI (Kp=0.0005, decay=0.995) handles dynamics. Interpolated from data:
+        # offset 0.000000 → +0.20m left, offset 0.000050 → -0.14m right → zero at ~0.000025.
+        # No curve fade needed at this magnitude (10% of EPAS bias).
+        apply_curvature += 0.000025
 
         # Measured curvature: used for driver override tracking and rate limiting
         current_curvature = -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1)
