@@ -507,9 +507,12 @@ class CarController(CarControllerBase):
       op_gas = actuators.accel  # gas uses UNSCALED value
 
       if CC.longActive:
-        # Compensate for engine creep at low speed.
-        # Either the ABS does not account for engine creep, or the correction is very slow
-        op_accel = apply_creep_compensation(op_accel, CS.out.vEgo)
+        # Compensate for engine creep at low speed — but only when holding at stop,
+        # not when the planner is commanding positive accel (resume from stop).
+        # Without this gate, creep comp subtracts 0.6 m/s² at standstill, requiring
+        # the E2E model to command >0.2 before any forward motion — adding ~200ms delay.
+        if op_accel <= 0.05:
+          op_accel = apply_creep_compensation(op_accel, CS.out.vEgo)
 
         # The stock system has been seen rate limiting the brake accel to 5 m/s^3,
         # however even 3.5 m/s^3 causes some overshoot with a step response.
