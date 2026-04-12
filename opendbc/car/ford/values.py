@@ -67,7 +67,7 @@ class CarControllerParams:
   ANGLE_LIMITS: AngleSteeringLimits = CURVE_MODE_PARAMS[0]['angle_limits']
   CURVATURE_ERROR = CURVE_MODE_PARAMS[0]['curvature_error']
 
-  ACCEL_MAX = 1.5               # m/s^2 max acceleration (was 2.0 — reduced for tuned ST's stronger engine)
+  ACCEL_MAX = 2.0               # m/s^2 max acceleration (restored — gas cap + EMA handle highway comfort)
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
   MIN_GAS = -0.5
   INACTIVE_GAS = -5.0
