@@ -142,6 +142,15 @@ class CarController(CarControllerBase):
     self.curve_mode = 0
     self._apply_curve_mode(0)
 
+    # CX1 telemetry state — for EPAS rate-response diagnostic
+    self.cx1_schema_logged = False
+    self.cx1_steering_angle_last = 0.0
+    self.cx1_burst_remaining = 0  # burst mode counter (frames at 100Hz)
+    self.cx1_last_lookup_time = 0.0
+    self.cx1_last_blend = 0.0
+    self.cx1_last_curv_factor = 0.0
+    self.cx1_last_lane_offset = 0.0
+
   def _apply_curve_mode(self, mode):
     """Apply curve mode preset values."""
     preset = CarControllerParams.CURVE_MODE_PARAMS.get(mode, CarControllerParams.CURVE_MODE_PARAMS[0])
@@ -237,12 +246,17 @@ class CarController(CarControllerBase):
           lookup_time = self._get_curvature_lookup_time(CS.out.vEgoRaw)
           predicted_curvature = float(np.interp(lookup_time, ModelConstants.T_IDXS, curvatures))
         else:
+          lookup_time = 0.0
           predicted_curvature = desired_curvature
 
         # Speed-dependent blend: ramp up for surface street curve anticipation,
         # ramp back down at highway speed to reduce 2x smoothness ratio (0.194 Hz hunting)
         blend = float(np.interp(CS.out.vEgoRaw, [7., 20., 27., 35.], [0.10, 0.30, 0.20, 0.10]))  # reduced highway blend to cut 1.2x smoothness ratio
         apply_curvature = (predicted_curvature * blend) + (desired_curvature * (1 - blend))
+
+        # CX1 telemetry: capture for later log
+        self.cx1_last_lookup_time = lookup_time
+        self.cx1_last_blend = blend
 
         # Low-speed curvature stabilizer: deadband + EMA
         #   <4 m/s:   deadband only — ignore corrections smaller than threshold,
@@ -294,6 +308,7 @@ class CarController(CarControllerBase):
             lc_ema_alpha = 1.0 - np.exp(-smooth_dt / 1.5)
             self.lane_offset_ema = float(lc_ema_alpha * lane_offset_raw + (1.0 - lc_ema_alpha) * self.lane_offset_ema)
             lane_offset = self.lane_offset_ema
+            self.cx1_last_lane_offset = lane_offset  # CX1 telemetry capture
             # Integral gate: only accumulate on straights when driver is not overriding.
             # Curve gate prevents false integral buildup from lane line geometry shift during turns.
             # P+I CORRECTION is applied unconditionally (whenever lane confidence is good) —
@@ -419,6 +434,7 @@ class CarController(CarControllerBase):
         curv_factor = float(np.interp(abs(predicted_curvature), [0.0, 0.001, 0.002], [0.0, 0.0, 1.0]))
         apply_curvature_rate *= curv_factor * self.curvature_rate_gain
         apply_curvature_rate = float(np.clip(apply_curvature_rate, -0.001023, 0.001023))
+        self.cx1_last_curv_factor = curv_factor  # CX1 telemetry capture
 
         # apply_curv_send is the value actually sent to EPAS. All post-rate-limit transformations
         # (lane change factor, FF bias) are applied here only — self.apply_curvature_last must
@@ -445,6 +461,61 @@ class CarController(CarControllerBase):
             apply_curvature_pre_rl, self.apply_curvature_last, apply_curv_send, current_curvature,
             CS.out.steeringPressed, reset_steering, self.post_reset_ramp_active, rl_clipped, aw_fired,
             CS.out.steeringAngleDeg, CS.out.steeringTorque))
+
+        # === CX1 EPAS Rate-Response Diagnostic Telemetry ===
+        # Schema v1: log per-frame data to determine if EPAS responds to curvature_rate signal
+        # Sampling: 10Hz during curves, 1Hz on straights, 20Hz burst on overshoot
+        # Designed to answer: H1 ignored, H2 deadband, H3 gain low, H4 hysteresis
+        if not self.cx1_schema_logged:
+          carlog.info("CX1: SCHEMA=t,v,yr,aLat,cmd,rate,meas,des,pred,ema,preRL,rl,cmdInt,rateInt,ang,dAng,tq,ovr,lc,lookT,blend,cFac,lOff,lInt,pmd,burst")
+          self.cx1_schema_logged = True
+
+        # Compute extra fields not already available
+        # Lateral acceleration (m/s²)
+        a_lat = CS.out.yawRate * CS.out.vEgoRaw
+        # Steering angle rate (deg/s) — derived from frame-to-frame delta
+        d_ang = (CS.out.steeringAngleDeg - self.cx1_steering_angle_last) / 0.01  # 100Hz
+        self.cx1_steering_angle_last = CS.out.steeringAngleDeg
+        # Post-quantization integer values (what actually goes on the wire after fordcan negation)
+        # LatCtlCurv_No_Actl: scale 2E-5, offset -0.02 → raw = (-cmd - (-0.02)) / 2E-5 = (0.02 - cmd) / 2E-5
+        # LatCtlCurv_NoRate_Actl: scale 2.5E-7, offset -0.001024 → raw = (-rate - (-0.001024)) / 2.5E-7
+        cmd_int = int(round((0.02 - apply_curv_send) / 2e-5))
+        rate_int = int(round((0.001024 - apply_curvature_rate) / 2.5e-7))
+        # pred minus des — the anticipation gap
+        pred_minus_des = predicted_curvature - desired_curvature
+
+        # Determine sample mode
+        is_curve = abs(apply_curv_send) > 0.001
+        is_overshoot = abs(current_curvature - apply_curv_send) > 0.001 and is_curve
+        # Burst trigger: detect new overshoot event, set burst counter for 50 frames (0.5s @ 100Hz)
+        if is_overshoot and self.cx1_burst_remaining == 0 and self.frame % 5 == 0:
+          self.cx1_burst_remaining = 50
+        # Decide whether to log this frame
+        if self.cx1_burst_remaining > 0:
+          # Burst mode: every 5 frames = 20Hz
+          should_log = (self.frame % 5 == 0)
+          if should_log:
+            self.cx1_burst_remaining -= 5
+        elif is_curve:
+          # Curve mode: every 10 frames = 10Hz
+          should_log = (self.frame % 10 == 0)
+        else:
+          # Straight baseline: every 100 frames = 1Hz
+          should_log = (self.frame % 100 == 0)
+
+        if should_log:
+          carlog.info("CX1: %d %.2f %+.5f %+.3f %+.6f %+.7f %+.6f %+.6f %+.6f %+.6f %+.6f %+.6f %d %d %+.2f %+.2f %+.2f %d %d %.3f %.3f %.3f %+.3f %+.4f %+.6f %d" % (
+            self.frame, CS.out.vEgoRaw, CS.out.yawRate, a_lat,
+            apply_curv_send, apply_curvature_rate, current_curvature,
+            desired_curvature, predicted_curvature, self.smooth_curvature_last,
+            apply_curvature_pre_rl, self.apply_curvature_last,
+            cmd_int, rate_int,
+            CS.out.steeringAngleDeg, d_ang, CS.out.steeringTorque,
+            CS.out.steeringPressed, 1 if lane_change else 0,
+            self.cx1_last_lookup_time, self.cx1_last_blend, self.cx1_last_curv_factor,
+            self.cx1_last_lane_offset, self.lane_centering_integral,
+            pred_minus_des, 1 if self.cx1_burst_remaining > 0 else 0
+          ))
 
         # Feed-forward EPAS bias correction: DISABLED for now.
         # The sign-flip guard prevents correction when |cmd| < ff_bias (~0.000420), which covers
