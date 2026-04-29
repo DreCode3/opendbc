@@ -38,6 +38,7 @@ class CarControllerParams:
       'curvature_lookup_time': ([15, 25], [0.5, 0.35]),  # speed-dependent: 0.5s at low speed, 0.35s at highway (was 0.3 — bumped for curve exit anticipation)
       'curvature_rate_gain': 1.0,  # was 1.15 — rate lag at apex causes overshoot (1.3→1.15→1.0)
       'smooth_tau': (0.12, 0.04),  # (low_speed, high_speed) EMA time constant in seconds
+      'smooth_tau_release': (0.18, 0.15),  # slower EMA on curve exit (Path 4 — gated by FordPath4Enabled)
     },
     1: {
       'angle_limits': AngleSteeringLimits(

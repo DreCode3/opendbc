@@ -142,6 +142,9 @@ class CarController(CarControllerBase):
     self.curve_mode = 0
     self._apply_curve_mode(0)
 
+    # Path 4: asymmetric release-side EMA — A/B toggle for paired drives
+    self.path4_enabled = False
+
     # CX1 telemetry state — for EPAS rate-response diagnostic
     self.cx1_schema_logged = False
     self.cx1_steering_angle_last = 0.0
@@ -150,6 +153,8 @@ class CarController(CarControllerBase):
     self.cx1_last_blend = 0.0
     self.cx1_last_curv_factor = 0.0
     self.cx1_last_lane_offset = 0.0
+    self.cx1_last_is_release = False
+    self.cx1_last_smooth_tau = 0.0
 
   def _apply_curve_mode(self, mode):
     """Apply curve mode preset values."""
@@ -159,6 +164,7 @@ class CarController(CarControllerBase):
     self._active_angle_limits = preset['angle_limits']
     self._active_curvature_error = preset['curvature_error']
     self._smooth_tau = preset.get('smooth_tau', (0.12, 0.04))
+    self._smooth_tau_release = preset.get('smooth_tau_release', self._smooth_tau)
 
   def _get_curvature_lookup_time(self, v_ego):
     """Get curvature lookup time, optionally speed-dependent."""
@@ -194,6 +200,10 @@ class CarController(CarControllerBase):
       if new_mode != self.curve_mode:
         self.curve_mode = new_mode
         self._apply_curve_mode(new_mode)
+      try:
+        self.path4_enabled = self.params.get_bool("FordPath4Enabled")
+      except Exception:
+        self.path4_enabled = False
 
     actuators = CC.actuators
     hud_control = CC.hudControl
@@ -271,12 +281,26 @@ class CarController(CarControllerBase):
         deadband = float(np.interp(CS.out.vEgoRaw, [0., 4., 7.], [0.001, 0.001, 0.0]))
         if abs(apply_curvature - self.smooth_curvature_last) <= deadband:
           apply_curvature = self.smooth_curvature_last  # hold: change too small to act on
-        # EMA above 4 m/s (no EMA below — deadband already holds)
+        # EMA above 4 m/s (no EMA below — deadband already holds).
+        # Path 4: when FordPath4Enabled, dampen release (curve exit) more than engagement to
+        # counter the EPAS-side fast-release that creates exit overshoot. Detector requires a
+        # meaningful curve magnitude (>0.0005) to avoid flutter through near-zero straight
+        # corrections, and same-sign shrinking magnitude to avoid S-curve sign-flip flapping.
+        is_release = False
         if CS.out.vEgoRaw >= 4.0:
-          smooth_tau = float(np.interp(CS.out.vEgoRaw, [4., 7., 25.], [self._smooth_tau[0], self._smooth_tau[0], self._smooth_tau[1]]))
+          engage_tau = float(np.interp(CS.out.vEgoRaw, [4., 7., 25.], [self._smooth_tau[0], self._smooth_tau[0], self._smooth_tau[1]]))
+          release_tau = float(np.interp(CS.out.vEgoRaw, [4., 7., 25.], [self._smooth_tau_release[0], self._smooth_tau_release[0], self._smooth_tau_release[1]]))
+          is_release = (abs(self.smooth_curvature_last) > 0.0005
+                        and abs(apply_curvature) < abs(self.smooth_curvature_last)
+                        and apply_curvature * self.smooth_curvature_last > 0)
+          smooth_tau = release_tau if (is_release and self.path4_enabled) else engage_tau
           smooth_alpha = 1.0 - np.exp(-smooth_dt / smooth_tau)
           apply_curvature = float(smooth_alpha * apply_curvature + (1.0 - smooth_alpha) * self.smooth_curvature_last)
+        else:
+          smooth_tau = self._smooth_tau[0]
         self.smooth_curvature_last = apply_curvature
+        self.cx1_last_is_release = is_release
+        self.cx1_last_smooth_tau = smooth_tau
 
         # Lane centering: PI controller on lateral position error
         # P term reacts immediately to current offset; I term cancels persistent structural bias.
@@ -467,7 +491,7 @@ class CarController(CarControllerBase):
         # Sampling: 10Hz during curves, 1Hz on straights, 20Hz burst on overshoot
         # Designed to answer: H1 ignored, H2 deadband, H3 gain low, H4 hysteresis
         if not self.cx1_schema_logged:
-          carlog.info("CX1: SCHEMA=t,v,yr,aLat,cmd,rate,meas,des,pred,ema,preRL,rl,cmdInt,rateInt,ang,dAng,tq,ovr,lc,lookT,blend,cFac,lOff,lInt,pmd,burst")
+          carlog.info("CX1: SCHEMA=t,v,yr,aLat,cmd,rate,meas,des,pred,ema,preRL,rl,cmdInt,rateInt,ang,dAng,tq,ovr,lc,lookT,blend,cFac,lOff,lInt,pmd,burst,p4Rel,p4Tau,p4On")
           self.cx1_schema_logged = True
 
         # Compute extra fields not already available
@@ -504,7 +528,7 @@ class CarController(CarControllerBase):
           should_log = (self.frame % 100 == 0)
 
         if should_log:
-          carlog.info("CX1: %d %.2f %+.5f %+.3f %+.6f %+.7f %+.6f %+.6f %+.6f %+.6f %+.6f %+.6f %d %d %+.2f %+.2f %+.2f %d %d %.3f %.3f %.3f %+.3f %+.4f %+.6f %d" % (
+          carlog.info("CX1: %d %.2f %+.5f %+.3f %+.6f %+.7f %+.6f %+.6f %+.6f %+.6f %+.6f %+.6f %d %d %+.2f %+.2f %+.2f %d %d %.3f %.3f %.3f %+.3f %+.4f %+.6f %d %d %.4f %d" % (
             self.frame, CS.out.vEgoRaw, CS.out.yawRate, a_lat,
             apply_curv_send, apply_curvature_rate, current_curvature,
             desired_curvature, predicted_curvature, self.smooth_curvature_last,
@@ -514,7 +538,9 @@ class CarController(CarControllerBase):
             CS.out.steeringPressed, 1 if lane_change else 0,
             self.cx1_last_lookup_time, self.cx1_last_blend, self.cx1_last_curv_factor,
             self.cx1_last_lane_offset, self.lane_centering_integral,
-            pred_minus_des, 1 if self.cx1_burst_remaining > 0 else 0
+            pred_minus_des, 1 if self.cx1_burst_remaining > 0 else 0,
+            1 if self.cx1_last_is_release else 0, self.cx1_last_smooth_tau,
+            1 if self.path4_enabled else 0
           ))
 
         # Feed-forward EPAS bias correction: DISABLED for now.
