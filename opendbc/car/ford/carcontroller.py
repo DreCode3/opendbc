@@ -353,10 +353,15 @@ class CarController(CarControllerBase):
             else:
               self.lane_centering_integral *= 0.995  # was 0.98 — retain 61% through 5s curve vs 13%
 
-            # Persist integral every 10s for warm-start on next drive
+            # Persist integral every 10s for warm-start on next drive.
+            # try/except guards against UnknownKeyName if param isn't registered — without
+            # the wrap, an unregistered key crashes card.py (observed 2026-05-03).
             self.lane_centering_integral_save_counter += 1
             if self.lane_centering_integral_save_counter >= 200:  # 200 steer frames = 10s at 20Hz
-              self.params.put_nonblocking("LaneBiasIntegral", str(round(self.lane_centering_integral, 4)))
+              try:
+                self.params.put_nonblocking("LaneBiasIntegral", str(round(self.lane_centering_integral, 4)))
+              except Exception:
+                pass
               self.lane_centering_integral_save_counter = 0
             pi_p = self.lc_kp * lane_offset
             pi_i = self.lc_ki * self.lane_centering_integral
