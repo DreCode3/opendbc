@@ -123,7 +123,7 @@ class CarController(CarControllerBase):
     self.enable_lane_positioning = True
     self.lane_offset_ema = 0.0  # EMA-smoothed lane offset to filter lane line noise
     self.lc_kp = 0.0001  # reverted from 0.0005 — testing memory baseline after comfort regression
-    self.lc_ki = 0.0002  # curvature per meter·second of accumulated offset (I term) — handles persistent drift smoothly
+    self.lc_ki = 0.0003  # bumped from 0.0002 on 2026-05-23 — targets 65-80mph residual left drift (+0.099m) by scaling I-term output 1.5x without dynamics change
     self.lane_centering_integral_save_counter = 0  # save integral every 10s (200 steer frames)
 
     # Persistent integral: restore from previous drive to eliminate cold-start left bias
