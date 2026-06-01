@@ -180,7 +180,7 @@ class CAR(Platforms):
       FordCarDocs("Ford Explorer 2020-24", hybrid=True),  # Hybrid: Limited and Platinum only
       FordCarDocs("Lincoln Aviator 2020-24", "Co-Pilot360 Plus", plug_in_hybrid=True),  # Hybrid: Grand Touring only
     ],
-    CarSpecs(mass=2050, wheelbase=3.025, steerRatio=18.0),  # bumped from 17.2 on 2026-05-29 — 19-drive measurement median 18.55 (17.95 at 25-45mph, 19.91 at 45-65mph). 18.0 targets surface-street range where user-reported curve feel issues occur
+    CarSpecs(mass=2050, wheelbase=3.025, steerRatio=17.2),  # reverted from 18.0 on 2026-05-30 — Iter 2 validation (a0, a1) showed +27% RMS lat accel, 6.6x override rate, +25% lane offset std, no subjective curve improvement. Returning to validated baseline.
   )
   FORD_EXPEDITION_MK4 = FordCANFDPlatformConfig(
     [FordCarDocs("Ford Expedition 2022-24", "Co-Pilot360 Assist 2.0", hybrid=False)],
