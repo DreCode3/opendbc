@@ -122,7 +122,9 @@ class CarController(CarControllerBase):
     # Lane centering via PI controller (default ON)
     self.enable_lane_positioning = True
     self.lane_offset_ema = 0.0  # EMA-smoothed lane offset to filter lane line noise
-    self.lc_kp = 0.0001  # reverted from 0.0005 — testing memory baseline after comfort regression
+    self.lc_kp = 0.0005  # default golden; live-toggled via /data/lc_pi_config
+    self._pi_cfg = "golden"
+    self._pi_cfg_ctr = 0
     self.lc_ki = 0.0002  # reverted from 0.0003 on 2026-05-29 — Ki=0.0003 had unvalidated 65-80mph target (no highway data) and user-reported curve feel regression; Iteration 2 targets curve performance via steerRatio
     self.lane_centering_integral_save_counter = 0  # save integral every 10s (200 steer frames)
 
@@ -342,7 +344,7 @@ class CarController(CarControllerBase):
               lc_integral_step = lane_offset * smooth_dt
               self.lane_centering_integral += lc_integral_step
               # Fixed integral cap ±0.3 (reverted from speed-interp 0.3→1.0 — testing memory baseline)
-              int_cap = 0.3
+              int_cap = 0.30 if self._pi_cfg == "weak" else float(np.interp(CS.out.vEgoRaw, [20., 30.], [0.3, 1.0]))
               self.lane_centering_integral = float(np.clip(self.lane_centering_integral, -int_cap, int_cap))
               # Zero-crossing decay: when offset crosses center (sign differs from integral),
               # gently decay the integral to prevent overshoot. Reduced from 0.92 to 0.97
@@ -351,7 +353,7 @@ class CarController(CarControllerBase):
               if lane_offset * self.lane_centering_integral < 0:  # offset and integral disagree
                 self.lane_centering_integral *= 0.97  # gentle decay toward zero
             else:
-              self.lane_centering_integral *= 0.98  # reverted from 0.995 — testing memory baseline
+              self.lane_centering_integral *= (0.98 if self._pi_cfg == "weak" else 0.995)  # live-toggled
 
             # Persist integral every 10s for warm-start on next drive.
             # try/except guards against UnknownKeyName if param isn't registered — without
@@ -363,6 +365,14 @@ class CarController(CarControllerBase):
               except Exception:
                 pass
               self.lane_centering_integral_save_counter = 0
+            self._pi_cfg_ctr += 1
+            if self._pi_cfg_ctr % 50 == 0:
+              try:
+                _c = open("/data/lc_pi_config").read().strip().lower()
+                self._pi_cfg = _c if _c in ("weak", "golden") else "golden"
+              except Exception:
+                self._pi_cfg = "golden"
+            self.lc_kp = 0.0001 if self._pi_cfg == "weak" else 0.0005
             pi_p = self.lc_kp * lane_offset
             pi_i = self.lc_ki * self.lane_centering_integral
             apply_curvature += pi_p + pi_i
