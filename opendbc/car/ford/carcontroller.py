@@ -585,16 +585,19 @@ class CarController(CarControllerBase):
         ramp_type = 0
         apply_curv_send = self.apply_curvature_last
 
-      # Send CAN message: path_offset=0, path_angle=0, curvature+rate NEGATED
+      # Send CAN message: path_offset=0, path_angle=0, curvature NEGATED, curvature_rate INACTIVE (0).
+      # Path B (v2026.002.001 migration): upstream disabled curvature_rate commanding ("not yet tested
+      # with the current safety limits") and its safety layer rejects any non-inactive curvature_rate.
+      # We align to upstream's tested curvature-only policy (matches stock ford carcontroller).
       if self.CP.flags & FordFlags.CANFD:
         mode = 1 if CC.latActive else 0
         counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
         can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, mode,
-                         0., 0., -apply_curv_send, -apply_curvature_rate, counter,
+                         0., 0., -apply_curv_send, 0., counter,
                          ramp_type=ramp_type, precision_type=1))
       else:
         can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, CC.latActive,
-                         0., 0., -apply_curv_send, -apply_curvature_rate,
+                         0., 0., -apply_curv_send, 0.,
                          ramp_type=ramp_type, precision_type=1))
 
     # send lka msg at 33Hz
