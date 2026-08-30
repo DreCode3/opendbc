@@ -30,6 +30,11 @@ class CarControllerParams:
   CURVATURE_LIMITS: CurvatureSteeringLimits = CurvatureSteeringLimits(0.02)  # Max curvature for steering command, m^-1
   CURVATURE_ERROR = 0.002  # ~6 degrees at 10 m/s, ~10 degrees at 35 m/s
 
+  # PSCM path-following precision. 0=Comfortable (what the stock system uses), 1=Precise.
+  # sd28 measured the PSCM over-delivering commanded curvature by 1.048x at DC and
+  # 1.13-1.20x in the 0.18-0.30 Hz band. This is the A/B knob for that; DEFAULT UNCHANGED.
+  LAT_CTL_PRECISION = 1
+
   ACCEL_MAX = 2.0               # m/s^2 max acceleration
   ACCEL_MIN = -3.5              # m/s^2 max deceleration
   MIN_GAS = -0.5
